@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use reqwest::Client;
 use semver::Version;
 use serde::Deserialize;
@@ -12,7 +12,9 @@ use crate::cache::VersionInfo;
 /// `Vec<Version>` for packages with hundreds of tags (e.g. `symfony/console`).
 pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     if !name.contains('/') {
-        return Err(anyhow!("composer package name must be vendor/package: {name}"));
+        return Err(anyhow!(
+            "composer package name must be vendor/package: {name}"
+        ));
     }
     let url = format!("https://repo.packagist.org/p2/{name}.json");
     let body: Root = super::get_json(client, "packagist", name, &url).await?;
@@ -26,13 +28,13 @@ pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     let mut latest_stable: Option<Version> = None;
     for v in versions {
         let raw = v.version.strip_prefix('v').unwrap_or(&v.version);
-        let Ok(parsed) = Version::parse(raw) else { continue };
+        let Ok(parsed) = Version::parse(raw) else {
+            continue;
+        };
         if latest_any.as_ref().is_none_or(|cur| &parsed > cur) {
             latest_any = Some(parsed.clone());
         }
-        if parsed.pre.is_empty()
-            && latest_stable.as_ref().is_none_or(|cur| &parsed > cur)
-        {
+        if parsed.pre.is_empty() && latest_stable.as_ref().is_none_or(|cur| &parsed > cur) {
             latest_stable = Some(parsed);
         }
     }

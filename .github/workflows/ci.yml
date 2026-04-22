@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Cancel any in-progress run for the same ref (e.g. on force-push).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lsp:
+    name: LSP (fmt + clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Shared cache keyed on Cargo.lock + toolchain version; dramatically
+      # speeds up follow-up runs at no correctness cost.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lsp
+      - name: fmt --check
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy -p uptick-lsp --all-targets -- -D warnings
+      - name: test
+        run: cargo test -p uptick-lsp --lib
+
+  extension:
+    name: Extension (wasm clippy + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: extension
+      - name: clippy
+        run: cargo clippy -p uptick-zed --target wasm32-wasip1 -- -D warnings
+      - name: build
+        run: cargo build -p uptick-zed --target wasm32-wasip1 --release

@@ -5,7 +5,7 @@ pub mod pub_dev;
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -17,11 +17,7 @@ use crate::cache::VersionInfo;
 use crate::manifest::ManifestKind;
 
 /// Dispatch to the right registry for a manifest kind.
-pub async fn fetch(
-    client: &Client,
-    kind: ManifestKind,
-    name: &str,
-) -> Result<VersionInfo> {
+pub async fn fetch(client: &Client, kind: ManifestKind, name: &str) -> Result<VersionInfo> {
     match kind {
         ManifestKind::Npm => npm::fetch(client, name).await,
         ManifestKind::Cargo => cargo::fetch(client, name).await,

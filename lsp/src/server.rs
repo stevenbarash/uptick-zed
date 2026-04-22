@@ -6,7 +6,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use reqwest::Client;
 use semver::Version;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tower_lsp::jsonrpc::Result as LspResult;
@@ -353,9 +353,11 @@ impl LanguageServer for Backend {
         let Some(state) = self.docs.get(&uri).map(|e| Arc::clone(&*e)) else {
             return Ok(None);
         };
-        let Some(hit) = state.entries.iter().find(|a| {
-            contains(&a.entry.version_range, pos) || contains(&a.entry.name_range, pos)
-        }) else {
+        let Some(hit) = state
+            .entries
+            .iter()
+            .find(|a| contains(&a.entry.version_range, pos) || contains(&a.entry.name_range, pos))
+        else {
             return Ok(None);
         };
 
@@ -393,10 +395,7 @@ impl LanguageServer for Backend {
         }))
     }
 
-    async fn code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> LspResult<Option<CodeActionResponse>> {
+    async fn code_action(&self, params: CodeActionParams) -> LspResult<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
         let Some(state) = self.docs.get(&uri).map(|e| Arc::clone(&*e)) else {
             return Ok(None);

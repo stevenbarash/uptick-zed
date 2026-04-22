@@ -1,5 +1,7 @@
 # uptick-zed
 
+[![CI](https://github.com/stevenbarash/versionlens-zed/actions/workflows/ci.yml/badge.svg)](https://github.com/stevenbarash/versionlens-zed/actions/workflows/ci.yml)
+
 A [Zed](https://zed.dev) extension that shows the latest available version of each dependency in package manifests — inline "what's the newest release?" feedback for `package.json`, `Cargo.toml`, `pubspec.yaml`, and `composer.json`. Inspired by the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension (see [Acknowledgements](#acknowledgements)).
 
 Supports:

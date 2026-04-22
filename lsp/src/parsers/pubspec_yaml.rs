@@ -62,7 +62,10 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
         }
 
         let after_colon = &rest[colon_rel + 1..];
-        let ws = after_colon.chars().take_while(|c| c.is_whitespace()).count();
+        let ws = after_colon
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .count();
         let body = &after_colon[ws..];
 
         // Strip a trailing ` # comment` (YAML requires whitespace before `#`).
@@ -77,9 +80,8 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
         }
 
         // Handle quoted scalars — single or double, matching opener/closer.
-        let is_quoted = |q: char| {
-            body_trim.len() >= 2 && body_trim.starts_with(q) && body_trim.ends_with(q)
-        };
+        let is_quoted =
+            |q: char| body_trim.len() >= 2 && body_trim.starts_with(q) && body_trim.ends_with(q);
         let (lit, quote_skip): (String, usize) = if is_quoted('"') || is_quoted('\'') {
             (body_trim[1..body_trim.len() - 1].to_string(), 1)
         } else {

@@ -1,6 +1,6 @@
 use jsonc_parser::ast::{ObjectPropName, Value};
 use jsonc_parser::common::Ranged;
-use jsonc_parser::{CollectOptions, ParseOptions, parse_to_ast};
+use jsonc_parser::{parse_to_ast, CollectOptions, ParseOptions};
 
 use crate::manifest::RawEntry;
 use crate::position::LineIndex;
