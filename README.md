@@ -87,4 +87,10 @@ Set `VERSIONLENS_LOG=debug` to see parse/fetch logs on stderr.
 
 ## License
 
-MIT.
+MIT. See [`LICENSE`](LICENSE).
+
+## Acknowledgements
+
+This project is an independent Rust/Zed port **inspired by** the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension (ISC License, © Peter Flannery and Contributors). It shares **no source code** with the original — every parser, registry provider, and server module here is original work written from scratch.
+
+This project is **not affiliated with or endorsed by** the upstream VersionLens project. See [`NOTICES.md`](NOTICES.md) for the upstream license text.
