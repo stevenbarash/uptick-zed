@@ -6,6 +6,7 @@ use semver::Version;
 use serde::Deserialize;
 
 use crate::cache::VersionInfo;
+use crate::manifest::ManifestKind;
 
 /// Packagist's v2 metadata endpoint returns every tagged release ever. Walk
 /// once, keeping running maxes for stable and any — avoids allocating a
@@ -15,7 +16,7 @@ pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
         return Err(anyhow!("composer package name must be vendor/package: {name}"));
     }
     let url = format!("https://repo.packagist.org/p2/{name}.json");
-    let body: Root = super::get_json(client, "packagist", name, &url).await?;
+    let body: Root = super::get_json(client, ManifestKind::Composer, name, &url).await?;
 
     let versions = body
         .packages

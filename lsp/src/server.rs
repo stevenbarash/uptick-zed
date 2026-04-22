@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use crate::parsers;
 use crate::providers;
 use crate::version;
 
-const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const CACHE_TTL: Duration = Duration::from_secs(3600);
 const DEBOUNCE: Duration = Duration::from_millis(250);
 const SERVER_NAME: &str = "versionlens-lsp";
 const DIAGNOSTIC_SOURCE: &str = "versionlens";
@@ -77,9 +78,9 @@ impl Backend {
 
     /// Parse text into entries and store. Returns the new state's `ManifestKind`
     /// if the document is one we handle.
-    fn reparse(&self, uri: &Url, text: String) -> Option<ManifestKind> {
+    fn reparse(&self, uri: &Url, text: &str) -> Option<ManifestKind> {
         let kind = ManifestKind::from_url(uri)?;
-        let entries = parsers::parse(kind, &text)
+        let entries = parsers::parse(kind, text)
             .into_iter()
             .map(|entry| {
                 let latest = self
@@ -159,7 +160,7 @@ async fn resolve_and_push(
         // `did_close` landed during fetch doesn't resurrect the doc.
         docs.alter(uri, |_, existing| {
             let mut new_entries = existing.entries.clone();
-            for a in new_entries.iter_mut() {
+            for a in &mut new_entries {
                 if a.latest.is_none() {
                     if let Some(info) = cache.get(kind, &a.entry.name) {
                         a.latest = info.latest_stable.or(info.latest_any);
@@ -267,7 +268,7 @@ impl LanguageServer for Backend {
                     CodeActionOptions {
                         code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
                         resolve_provider: Some(false),
-                        work_done_progress_options: Default::default(),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
                     },
                 )),
                 ..Default::default()
@@ -285,7 +286,7 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        if self.reparse(&uri, params.text_document.text).is_some() {
+        if self.reparse(&uri, &params.text_document.text).is_some() {
             self.schedule_resolve(uri, Duration::ZERO);
         }
     }
@@ -296,7 +297,7 @@ impl LanguageServer for Backend {
         let Some(change) = params.content_changes.into_iter().next() else {
             return;
         };
-        if self.reparse(&uri, change.text).is_some() {
+        if self.reparse(&uri, &change.text).is_some() {
             self.schedule_resolve(uri, DEBOUNCE);
         }
     }
@@ -328,9 +329,9 @@ impl LanguageServer for Backend {
                 let latest = a.latest.as_ref()?;
                 let up_to_date = version::satisfies(&a.entry.version_literal, latest);
                 let label = if up_to_date {
-                    format!(" ✓ {}", latest)
+                    format!(" ✓ {latest}")
                 } else {
-                    format!(" → {}", latest)
+                    format!(" → {latest}")
                 };
                 Some(InlayHint {
                     position: a.entry.version_range.end,
@@ -361,18 +362,18 @@ impl LanguageServer for Backend {
 
         // Render the name inside a code span so backticks, brackets, or
         // parens in an exotic package name can't be interpreted as markdown
-        // link/formatting syntax.
-        let mut md = format!("`{}`", hit.entry.name.replace('`', "'"));
+        // link/formatting syntax. `write!` into `String` is infallible.
+        let mut md = String::new();
+        let name = hit.entry.name.replace('`', "'");
+        write!(md, "`{name}`").unwrap();
         if let Some(group) = hit.entry.group {
-            md.push_str(&format!(" _({group})_"));
+            write!(md, " _({group})_").unwrap();
         }
         md.push('\n');
-        md.push_str(&format!(
-            "\ncurrent: `{}`\n",
-            hit.entry.version_literal.replace('`', "'")
-        ));
+        let literal = hit.entry.version_literal.replace('`', "'");
+        write!(md, "\ncurrent: `{literal}`\n").unwrap();
         if let Some(latest) = &hit.latest {
-            md.push_str(&format!("latest: `{latest}`\n"));
+            writeln!(md, "latest: `{latest}`").unwrap();
         } else {
             md.push_str("latest: _resolving…_\n");
         }
@@ -381,7 +382,7 @@ impl LanguageServer for Backend {
             .get(state.kind, &hit.entry.name)
             .and_then(|info| info.url)
         {
-            md.push_str(&format!("\n[registry]({url})"));
+            write!(md, "\n[registry]({url})").unwrap();
         }
 
         Ok(Some(Hover {

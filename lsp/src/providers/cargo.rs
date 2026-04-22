@@ -4,10 +4,11 @@ use semver::Version;
 use serde::Deserialize;
 
 use crate::cache::VersionInfo;
+use crate::manifest::ManifestKind;
 
 pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
-    let body: CratesResp = super::get_json(client, "crates.io", name, &url).await?;
+    let body: CratesResp = super::get_json(client, ManifestKind::Cargo, name, &url).await?;
 
     let latest_stable = body
         .crate_
