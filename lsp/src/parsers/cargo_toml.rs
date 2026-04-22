@@ -9,8 +9,7 @@ use crate::position::LineIndex;
 const GROUPS: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
 pub fn parse(source: &str) -> Vec<RawEntry> {
-    // `Document` (formerly `ImDocument`) preserves source spans; the
-    // mutable `DocumentMut` strips them.
+    // `Document` preserves source spans; the mutable `DocumentMut` strips them.
     let Ok(doc) = Document::parse(source) else {
         return Vec::new();
     };
