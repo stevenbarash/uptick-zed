@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use toml_edit::{ImDocument, Item, Value};
+use toml_edit::{Document, Item, Value};
 
 use crate::manifest::RawEntry;
 use crate::parsers::trim_matching_quote;
@@ -9,8 +9,9 @@ use crate::position::LineIndex;
 const GROUPS: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
 pub fn parse(source: &str) -> Vec<RawEntry> {
-    // `ImDocument` preserves source spans; `DocumentMut` strips them.
-    let Ok(doc) = ImDocument::parse(source) else {
+    // `Document` (formerly `ImDocument`) preserves source spans; the
+    // mutable `DocumentMut` strips them.
+    let Ok(doc) = Document::parse(source) else {
         return Vec::new();
     };
     let idx = LineIndex::new(source);

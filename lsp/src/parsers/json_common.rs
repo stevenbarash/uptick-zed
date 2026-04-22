@@ -17,6 +17,7 @@ pub fn parse_deps(source: &str, groups: &[&'static str]) -> Vec<RawEntry> {
             allow_comments: true,
             allow_loose_object_property_names: true,
             allow_trailing_commas: true,
+            ..Default::default()
         },
     ) {
         Ok(r) => r,
