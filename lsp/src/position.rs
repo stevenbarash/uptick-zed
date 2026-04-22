@@ -30,11 +30,12 @@ impl<'a> LineIndex<'a> {
         let line_start = self.line_starts[line];
         let utf16_col: usize = self.source[line_start..byte_offset]
             .chars()
-            .map(|c| c.len_utf16())
+            .map(char::len_utf16)
             .sum();
+        // Saturate on pathological > 4GiB documents rather than silently wrapping.
         Position {
-            line: line as u32,
-            character: utf16_col as u32,
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            character: u32::try_from(utf16_col).unwrap_or(u32::MAX),
         }
     }
 

@@ -24,7 +24,7 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
     // `[target.'cfg(...)'.dependencies]` — one level of nesting, which covers
     // the common case without getting tangled in arbitrary subtables.
     if let Some(target) = doc.get("target").and_then(Item::as_table) {
-        for (_cfg, cfg_item) in target.iter() {
+        for (_cfg, cfg_item) in target {
             if let Some(cfg_tbl) = cfg_item.as_table() {
                 for group in GROUPS {
                     if let Some(tbl) = cfg_tbl.get(group).and_then(Item::as_table) {
@@ -45,7 +45,7 @@ fn collect_table(
     group: &'static str,
     out: &mut Vec<RawEntry>,
 ) {
-    for (key, item) in table.iter() {
+    for (key, item) in table {
         let span = match item {
             // `serde = "1.0"`
             Item::Value(v @ Value::String(_)) => v.span(),
@@ -92,9 +92,8 @@ fn name_range(idx: &LineIndex, table: &toml_edit::Table, key: &str) -> tower_lsp
     // name_range is used only for hovers, so the degradation is harmless.
     table
         .key(key)
-        .and_then(|k| k.span())
-        .map(|s| idx.range(s))
-        .unwrap_or_else(|| idx.range(0..0))
+        .and_then(toml_edit::Key::span)
+        .map_or_else(|| idx.range(0..0), |s| idx.range(s))
 }
 
 #[cfg(test)]

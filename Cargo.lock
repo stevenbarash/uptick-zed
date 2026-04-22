@@ -1641,7 +1641,6 @@ dependencies = [
  "futures",
  "indoc",
  "jsonc-parser",
- "once_cell",
  "reqwest",
  "semver",
  "serde",

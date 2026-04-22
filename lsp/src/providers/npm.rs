@@ -4,6 +4,7 @@ use semver::Version;
 use serde::Deserialize;
 
 use crate::cache::VersionInfo;
+use crate::manifest::ManifestKind;
 
 /// npm registry's `/{pkg}/latest` endpoint returns the "release" dist-tag as
 /// a compact doc — cheaper than the full metadata payload. Scoped packages
@@ -15,7 +16,7 @@ pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
         name.to_string()
     };
     let url = format!("https://registry.npmjs.org/{path}/latest");
-    let body: Latest = super::get_json(client, "npm", name, &url).await?;
+    let body: Latest = super::get_json(client, ManifestKind::Npm, name, &url).await?;
     let latest = Version::parse(&body.version).ok();
     Ok(VersionInfo {
         latest_stable: latest.clone(),
