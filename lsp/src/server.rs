@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,6 +7,8 @@ use dashmap::DashMap;
 use reqwest::Client;
 use semver::Version;
 use serde_json::{Value, json};
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tower_lsp::jsonrpc::Result as LspResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client as LspClient, LanguageServer};
@@ -19,6 +21,7 @@ use crate::providers;
 use crate::version;
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const DEBOUNCE: Duration = Duration::from_millis(250);
 const SERVER_NAME: &str = "versionlens-lsp";
 const DIAGNOSTIC_SOURCE: &str = "versionlens";
 const USER_AGENT: &str = concat!(
@@ -28,9 +31,9 @@ const USER_AGENT: &str = concat!(
 );
 
 #[derive(Debug, Clone)]
-pub struct Annotated {
-    pub entry: RawEntry,
-    pub latest: Option<Version>,
+struct Annotated {
+    entry: RawEntry,
+    latest: Option<Version>,
 }
 
 /// Immutable snapshot of one document. We always replace the `Arc` wholesale
@@ -50,6 +53,9 @@ pub struct Backend {
     /// Last-pushed fingerprint per doc. Skips the refresh/diagnostics storm
     /// when a reparse produced no user-visible changes (common while typing).
     pushed: Arc<DashMap<Url, u64>>,
+    /// In-flight debounced resolve tasks, keyed by document. A new `did_change`
+    /// aborts the prior task so we only do one network round-trip per burst.
+    pending: Arc<DashMap<Url, JoinHandle<()>>>,
 }
 
 impl Backend {
@@ -65,6 +71,7 @@ impl Backend {
             cache: Arc::new(VersionCache::new(CACHE_TTL)),
             docs: Arc::new(DashMap::new()),
             pushed: Arc::new(DashMap::new()),
+            pending: Arc::new(DashMap::new()),
         }
     }
 
@@ -87,75 +94,86 @@ impl Backend {
         Some(kind)
     }
 
-    /// Spawn lookups for any entries without a cached latest. Results are
-    /// merged back via a fresh `Arc<DocState>` and then pushed to the editor
-    /// — but only if the doc's fingerprint actually changed.
-    fn resolve_missing(&self, uri: Url) {
-        let Some(state) = self.docs.get(&uri).map(|e| Arc::clone(&*e)) else {
-            return;
-        };
-        let kind = state.kind;
-
-        let to_fetch: Vec<String> = state
-            .entries
-            .iter()
-            .filter(|a| a.latest.is_none())
-            .map(|a| a.entry.name.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if to_fetch.is_empty() {
-            self.push_updates(uri);
-            return;
+    /// Schedule registry lookups for entries without a cached latest, after
+    /// `delay` (0 for `did_open`, `DEBOUNCE` for `did_change`). A prior
+    /// pending task for the same URI is aborted so bursts of keystrokes
+    /// collapse into a single round-trip.
+    fn schedule_resolve(&self, uri: Url, delay: Duration) {
+        if let Some((_, prev)) = self.pending.remove(&uri) {
+            prev.abort();
         }
-
         let http = self.http.clone();
         let cache = self.cache.clone();
         let docs = self.docs.clone();
         let pushed = self.pushed.clone();
+        let pending = self.pending.clone();
         let client = self.client.clone();
+        let uri_key = uri.clone();
 
-        tokio::spawn(async move {
-            use futures::StreamExt;
-            let mut futs = futures::stream::FuturesUnordered::new();
-            for name in to_fetch {
-                let http = http.clone();
-                futs.push(async move { (name.clone(), providers::fetch(&http, kind, &name).await) });
+        let handle = tokio::spawn(async move {
+            if !delay.is_zero() {
+                sleep(delay).await;
             }
-            while let Some((name, res)) = futs.next().await {
-                match res {
-                    Ok(info) => cache.put(kind, name, info),
-                    Err(e) => warn!(?name, "registry lookup failed: {e:#}"),
-                }
-            }
+            pending.remove(&uri_key);
+            resolve_and_push(&client, &http, &cache, &docs, &pushed, &uri_key).await;
+        });
+        self.pending.insert(uri, handle);
+    }
+}
 
-            if let Some(existing) = docs.get(&uri).map(|e| Arc::clone(&*e)) {
-                let mut new_entries = existing.entries.clone();
-                for a in new_entries.iter_mut() {
-                    if a.latest.is_none() {
-                        if let Some(info) = cache.get(kind, &a.entry.name) {
-                            a.latest = info.latest_stable.or(info.latest_any);
-                        }
+async fn resolve_and_push(
+    client: &LspClient,
+    http: &Client,
+    cache: &Arc<VersionCache>,
+    docs: &DashMap<Url, Arc<DocState>>,
+    pushed: &DashMap<Url, u64>,
+    uri: &Url,
+) {
+    let Some(state) = docs.get(uri).map(|e| Arc::clone(&*e)) else {
+        return;
+    };
+    let kind = state.kind;
+
+    let to_fetch: HashSet<String> = state
+        .entries
+        .iter()
+        .filter(|a| a.latest.is_none())
+        .map(|a| a.entry.name.clone())
+        .collect();
+
+    if !to_fetch.is_empty() {
+        use futures::StreamExt;
+        let mut futs = futures::stream::FuturesUnordered::new();
+        for name in to_fetch {
+            let http = http.clone();
+            futs.push(async move { (name.clone(), providers::fetch(&http, kind, &name).await) });
+        }
+        while let Some((name, res)) = futs.next().await {
+            match res {
+                Ok(info) => cache.put(kind, name, info),
+                Err(e) => warn!(?name, "registry lookup failed: {e:#}"),
+            }
+        }
+
+        // `alter` only fires if the entry is still present, so a
+        // `did_close` landed during fetch doesn't resurrect the doc.
+        docs.alter(uri, |_, existing| {
+            let mut new_entries = existing.entries.clone();
+            for a in new_entries.iter_mut() {
+                if a.latest.is_none() {
+                    if let Some(info) = cache.get(kind, &a.entry.name) {
+                        a.latest = info.latest_stable.or(info.latest_any);
                     }
                 }
-                let new_state = Arc::new(DocState {
-                    kind: existing.kind,
-                    entries: new_entries,
-                });
-                docs.insert(uri.clone(), new_state);
             }
-            push_updates_raw(&client, &docs, &pushed, &uri).await;
+            Arc::new(DocState {
+                kind: existing.kind,
+                entries: new_entries,
+            })
         });
     }
 
-    fn push_updates(&self, uri: Url) {
-        let docs = self.docs.clone();
-        let pushed = self.pushed.clone();
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            push_updates_raw(&client, &docs, &pushed, &uri).await;
-        });
-    }
+    push_updates_raw(client, docs, pushed, uri).await;
 }
 
 /// Compute a stable fingerprint for the visible state: entry names, their
@@ -167,7 +185,17 @@ fn fingerprint(state: &DocState) -> u64 {
     for a in &state.entries {
         a.entry.name.hash(&mut h);
         a.entry.version_literal.hash(&mut h);
-        a.latest.as_ref().map(|v| v.to_string()).hash(&mut h);
+        match &a.latest {
+            None => 0u8.hash(&mut h),
+            Some(v) => {
+                1u8.hash(&mut h);
+                v.major.hash(&mut h);
+                v.minor.hash(&mut h);
+                v.patch.hash(&mut h);
+                v.pre.as_str().hash(&mut h);
+                v.build.as_str().hash(&mut h);
+            }
+        }
     }
     h.finish()
 }
@@ -228,6 +256,8 @@ impl LanguageServer for Backend {
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
             capabilities: ServerCapabilities {
+                // Explicit: `LineIndex` produces UTF-16 columns.
+                position_encoding: Some(PositionEncodingKind::UTF16),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
@@ -256,7 +286,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         if self.reparse(&uri, params.text_document.text).is_some() {
-            self.resolve_missing(uri);
+            self.schedule_resolve(uri, Duration::ZERO);
         }
     }
 
@@ -267,12 +297,15 @@ impl LanguageServer for Backend {
             return;
         };
         if self.reparse(&uri, change.text).is_some() {
-            self.resolve_missing(uri);
+            self.schedule_resolve(uri, DEBOUNCE);
         }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        if let Some((_, h)) = self.pending.remove(&uri) {
+            h.abort();
+        }
         self.docs.remove(&uri);
         self.pushed.remove(&uri);
         self.client.publish_diagnostics(uri, vec![], None).await;
@@ -326,12 +359,18 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let mut md = format!("**{}**", hit.entry.name);
+        // Render the name inside a code span so backticks, brackets, or
+        // parens in an exotic package name can't be interpreted as markdown
+        // link/formatting syntax.
+        let mut md = format!("`{}`", hit.entry.name.replace('`', "'"));
         if let Some(group) = hit.entry.group {
             md.push_str(&format!(" _({group})_"));
         }
         md.push('\n');
-        md.push_str(&format!("\ncurrent: `{}`\n", hit.entry.version_literal));
+        md.push_str(&format!(
+            "\ncurrent: `{}`\n",
+            hit.entry.version_literal.replace('`', "'")
+        ));
         if let Some(latest) = &hit.latest {
             md.push_str(&format!("latest: `{latest}`\n"));
         } else {
@@ -441,5 +480,46 @@ mod tests {
         assert_eq!(replacement("~1.2.3", &latest), "~1.5.0");
         assert_eq!(replacement("1.2.3", &latest), "1.5.0");
         assert_eq!(replacement(">= 1.2.3", &latest), ">= 1.5.0");
+    }
+
+    fn r(sl: u32, sc: u32, el: u32, ec: u32) -> Range {
+        Range {
+            start: Position::new(sl, sc),
+            end: Position::new(el, ec),
+        }
+    }
+
+    #[test]
+    fn contains_handles_same_line() {
+        let range = r(2, 4, 2, 10);
+        assert!(contains(&range, Position::new(2, 4)));
+        assert!(contains(&range, Position::new(2, 7)));
+        assert!(contains(&range, Position::new(2, 10)));
+        assert!(!contains(&range, Position::new(2, 3)));
+        assert!(!contains(&range, Position::new(2, 11)));
+    }
+
+    #[test]
+    fn contains_spans_multiple_lines() {
+        let range = r(2, 4, 5, 2);
+        assert!(contains(&range, Position::new(3, 0)));
+        assert!(contains(&range, Position::new(4, 999)));
+        assert!(!contains(&range, Position::new(1, 99)));
+        assert!(!contains(&range, Position::new(5, 3)));
+    }
+
+    #[test]
+    fn ranges_overlap_cases() {
+        let a = r(1, 0, 1, 10);
+        assert!(ranges_overlap(&a, &r(1, 0, 1, 10)));
+        assert!(ranges_overlap(&a, &r(1, 5, 1, 15)));
+        assert!(ranges_overlap(&a, &r(0, 5, 2, 3)));
+        // Touching at a single point (end of A == start of B): treat as overlap.
+        // Code actions on a cursor placed exactly at a boundary should still fire.
+        assert!(ranges_overlap(&a, &r(1, 10, 1, 20)));
+        // Disjoint same-line.
+        assert!(!ranges_overlap(&a, &r(1, 11, 1, 20)));
+        // Disjoint different-line.
+        assert!(!ranges_overlap(&a, &r(3, 0, 3, 5)));
     }
 }
