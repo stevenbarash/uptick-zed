@@ -1,6 +1,6 @@
 # uptick-zed
 
-[![CI](https://github.com/stevenbarash/versionlens-zed/actions/workflows/ci.yml/badge.svg)](https://github.com/stevenbarash/versionlens-zed/actions/workflows/ci.yml)
+[![CI](https://github.com/stevenbarash/uptick-zed/actions/workflows/ci.yml/badge.svg)](https://github.com/stevenbarash/uptick-zed/actions/workflows/ci.yml)
 
 A [Zed](https://zed.dev) extension that shows the latest available version of each dependency in package manifests — inline "what's the newest release?" feedback for `package.json`, `Cargo.toml`, `pubspec.yaml`, and `composer.json`. Inspired by the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension (see [Acknowledgements](#acknowledgements)).
 
@@ -112,7 +112,7 @@ That separation means `uptick-lsp` is reusable from any LSP-aware editor (Neovim
 ```sh
 cargo install --path lsp
 # or, once the repo is public:
-# cargo install --git https://github.com/stevenbarash/versionlens-zed uptick-lsp
+# cargo install --git https://github.com/stevenbarash/uptick-zed uptick-lsp
 ```
 
 Make sure `~/.cargo/bin` is on your `PATH`.
@@ -122,8 +122,8 @@ Make sure `~/.cargo/bin` is on your `PATH`.
 While the extension isn't yet in the Zed registry, install it as a dev extension:
 
 ```sh
-git clone https://github.com/stevenbarash/versionlens-zed
-cd versionlens-zed
+git clone https://github.com/stevenbarash/uptick-zed
+cd uptick-zed
 # In Zed: run the command `zed: install dev extension` and point it at this folder.
 ```
 

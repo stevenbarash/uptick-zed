@@ -15,7 +15,7 @@ impl zed::Extension for UptickExtension {
         let path = worktree.which("uptick-lsp").ok_or_else(|| {
             "uptick-lsp was not found on PATH. \
              Install it with `cargo install --path lsp` from the extension repo, \
-             or `cargo install --git https://github.com/stevenbarash/versionlens-zed uptick-lsp`."
+             or `cargo install --git https://github.com/stevenbarash/uptick-zed uptick-lsp`."
                 .to_string()
         })?;
 

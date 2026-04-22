@@ -22,7 +22,7 @@ members = ["lsp"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/stevenbarash/versionlens-zed"
+repository = "https://github.com/stevenbarash/uptick-zed"
 
 # Cargo only allows `opt-level`, `codegen-units`, and `strip` to be
 # overridden per-package; `lto` must be top-level. Thin LTO is a

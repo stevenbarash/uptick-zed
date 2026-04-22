@@ -27,7 +27,7 @@ const DIAGNOSTIC_SOURCE: &str = "uptick";
 const USER_AGENT: &str = concat!(
     "uptick-lsp/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/stevenbarash/versionlens-zed)"
+    " (+https://github.com/stevenbarash/uptick-zed)"
 );
 
 #[derive(Debug, Clone)]
