@@ -71,9 +71,9 @@ Open a supported manifest (`package.json`, `Cargo.toml`, `pubspec.yaml`, `compos
 ## Development
 
 ```sh
-cargo test -p versionlens-lsp                 # unit tests
-cargo build -p versionlens-lsp --release       # build the LSP binary
-cargo build -p versionlens-zed --target wasm32-wasip1 --release   # build the WASM extension
+cargo test -p versionlens-lsp                          # unit tests
+cargo build -p versionlens-lsp --release               # build the LSP binary
+cargo build --target wasm32-wasip1 --release           # build the WASM extension (root package)
 ```
 
 Set `VERSIONLENS_LOG=debug` to see parse/fetch logs on stderr.
