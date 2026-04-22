@@ -1,13 +1,13 @@
 # Third-party notices
 
-This file records upstream projects that inspired or informed versionlens-zed.
+This file records upstream projects that inspired or informed uptick-zed.
 Including license text here is a courtesy — no source code is reused from
 these projects, so no attribution is strictly required by their licenses.
 
 ## VSCode VersionLens
 
 - Project: https://gitlab.com/versionlens/vscode-versionlens
-- Relationship: versionlens-zed is an independent reimplementation in Rust
+- Relationship: uptick-zed is an independent reimplementation in Rust
   for the Zed editor. It replicates the user-facing concept (inline "latest
   version" annotations on package manifests) but shares no source code with
   the original. Ecosystem support, parser choices, caching, rate limiting,

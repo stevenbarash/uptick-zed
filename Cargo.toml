@@ -1,5 +1,5 @@
 [package]
-name = "versionlens-zed"
+name = "uptick-zed"
 description = "Zed extension that shows the latest version of each dependency in package.json, Cargo.toml, pubspec.yaml, and composer.json."
 version.workspace = true
 edition.workspace = true
@@ -35,6 +35,6 @@ strip = "symbols"
 
 # The extension is a tiny cdylib shipped as .wasm; trade code-gen time
 # and runtime speed for minimum binary size.
-[profile.release.package.versionlens-zed]
+[profile.release.package.uptick-zed]
 codegen-units = 1
 opt-level = "z"

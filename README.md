@@ -1,6 +1,6 @@
-# versionlens-zed
+# uptick-zed
 
-A [Zed](https://zed.dev) extension that shows the latest available version of each dependency in package manifests — the inline "what's the newest release?" feedback you'd get from the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension.
+A [Zed](https://zed.dev) extension that shows the latest available version of each dependency in package manifests — inline "what's the newest release?" feedback for `package.json`, `Cargo.toml`, `pubspec.yaml`, and `composer.json`. Inspired by the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension (see [Acknowledgements](#acknowledgements)).
 
 Supports:
 
@@ -72,20 +72,20 @@ This is **v0.1** — a minimum-viable port with the four largest ecosystems cove
 
 **Distribution**
 
-- Prebuilt `versionlens-lsp` binaries attached to GitHub releases, auto-downloaded by the WASM extension on first run (the `zed-dependi` pattern). Removes the manual `cargo install` step.
+- Prebuilt `uptick-lsp` binaries attached to GitHub releases, auto-downloaded by the WASM extension on first run (the `zed-dependi` pattern). Removes the manual `cargo install` step.
 - Publish to Zed's extension registry once stable.
 
 ### v0.3+ — nice to have
 
 - `--include-prereleases` config flag. Each provider already returns `latest_stable` and `latest_any`; we just always prefer stable today.
-- Persistent on-disk cache across LSP restarts (e.g. `~/.cache/versionlens/`).
+- Persistent on-disk cache across LSP restarts (e.g. `~/.cache/uptick/`).
 - Workspace command: "Bump all outdated".
 - Deprecation warnings — surface npm's `deprecated` field from registry responses.
 - Security advisories — integrate GHSA / [osv.dev](https://osv.dev) on affected deps.
 - Private registry / auth support — read `.npmrc`, Cargo `[registries]`, per-project tokens.
 - Per-ecosystem TTL tuning (npm moves fast, crates.io is slower).
 - Workspace-aware Cargo support — one root `Cargo.toml` covering all workspace members' deps without needing each opened individually.
-- Optional `versionlens.toml` per-project config.
+- Optional `uptick.toml` per-project config.
 
 ### Known limitations in v0.1
 
@@ -99,9 +99,9 @@ This is **v0.1** — a minimum-viable port with the four largest ecosystems cove
 Zed's extension API doesn't (yet — see [zed#49438](https://github.com/zed-industries/zed/issues/49438)) expose inline decorations, but it renders everything a language server publishes. This repo therefore ships two pieces:
 
 - **Root crate (`src/lib.rs`)** — a thin WASM extension (the file Zed loads). It implements `language_server_command()` and launches the LSP binary.
-- **`lsp/`** — a standalone Rust LSP (`versionlens-lsp`) that parses the manifest, hits the registry, caches results for an hour, and publishes inlay hints, diagnostics, code actions, and hovers.
+- **`lsp/`** — a standalone Rust LSP (`uptick-lsp`) that parses the manifest, hits the registry, caches results for an hour, and publishes inlay hints, diagnostics, code actions, and hovers.
 
-That separation means `versionlens-lsp` is reusable from any LSP-aware editor (Neovim, Helix, …), not just Zed.
+That separation means `uptick-lsp` is reusable from any LSP-aware editor (Neovim, Helix, …), not just Zed.
 
 ## Installation
 
@@ -110,7 +110,7 @@ That separation means `versionlens-lsp` is reusable from any LSP-aware editor (N
 ```sh
 cargo install --path lsp
 # or, once the repo is public:
-# cargo install --git https://github.com/stevenbarash/versionlens-zed versionlens-lsp
+# cargo install --git https://github.com/stevenbarash/versionlens-zed uptick-lsp
 ```
 
 Make sure `~/.cargo/bin` is on your `PATH`.
@@ -130,13 +130,13 @@ Open a supported manifest (`package.json`, `Cargo.toml`, `pubspec.yaml`, `compos
 ## Development
 
 ```sh
-cargo test -p versionlens-lsp                          # unit tests
-cargo check -p versionlens-lsp                         # fast typecheck for inner-loop iteration
+cargo test -p uptick-lsp                               # unit tests
+cargo check -p uptick-lsp                              # fast typecheck for inner-loop iteration
 cargo build --target wasm32-wasip1 --release           # build the WASM extension (root package)
 cargo install --path lsp                               # release-build and install the LSP binary
 ```
 
-Set `VERSIONLENS_LOG=debug` to see parse/fetch logs on stderr.
+Set `UPTICK_LOG=debug` to see parse/fetch logs on stderr.
 
 ## Design notes
 

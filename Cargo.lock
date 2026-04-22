@@ -1633,6 +1633,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "uptick-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dashmap 6.1.0",
+ "futures",
+ "indoc",
+ "jsonc-parser",
+ "once_cell",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "toml_edit",
+ "tower-lsp",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "uptick-zed"
+version = "0.1.0"
+dependencies = [
+ "zed_extension_api",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1662,36 +1692,6 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
-
-[[package]]
-name = "versionlens-lsp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dashmap 6.1.0",
- "futures",
- "indoc",
- "jsonc-parser",
- "once_cell",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "toml_edit",
- "tower-lsp",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "versionlens-zed"
-version = "0.1.0"
-dependencies = [
- "zed_extension_api",
-]
 
 [[package]]
 name = "want"

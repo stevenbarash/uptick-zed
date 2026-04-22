@@ -22,10 +22,10 @@ use crate::version;
 
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const DEBOUNCE: Duration = Duration::from_millis(250);
-const SERVER_NAME: &str = "versionlens-lsp";
-const DIAGNOSTIC_SOURCE: &str = "versionlens";
+const SERVER_NAME: &str = "uptick-lsp";
+const DIAGNOSTIC_SOURCE: &str = "uptick";
 const USER_AGENT: &str = concat!(
-    "versionlens-lsp/",
+    "uptick-lsp/",
     env!("CARGO_PKG_VERSION"),
     " (+https://github.com/stevenbarash/versionlens-zed)"
 );
