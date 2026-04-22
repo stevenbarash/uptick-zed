@@ -39,7 +39,7 @@ Hover over any dependency name or version for a summary with a link to the regis
 
 Zed's extension API doesn't (yet — see [zed#49438](https://github.com/zed-industries/zed/issues/49438)) expose inline decorations, but it renders everything a language server publishes. This repo therefore ships two pieces:
 
-- **`extension/`** — a thin WASM extension (the file Zed loads). It implements `language_server_command()` and launches the LSP binary.
+- **Root crate (`src/lib.rs`)** — a thin WASM extension (the file Zed loads). It implements `language_server_command()` and launches the LSP binary.
 - **`lsp/`** — a standalone Rust LSP (`versionlens-lsp`) that parses the manifest, hits the registry, caches results for an hour, and publishes inlay hints, diagnostics, code actions, and hovers.
 
 That separation means `versionlens-lsp` is reusable from any LSP-aware editor (Neovim, Helix, …), not just Zed.
@@ -72,8 +72,9 @@ Open a supported manifest (`package.json`, `Cargo.toml`, `pubspec.yaml`, `compos
 
 ```sh
 cargo test -p versionlens-lsp                          # unit tests
-cargo build -p versionlens-lsp --release               # build the LSP binary
+cargo check -p versionlens-lsp                         # fast typecheck for inner-loop iteration
 cargo build --target wasm32-wasip1 --release           # build the WASM extension (root package)
+cargo install --path lsp                               # release-build and install the LSP binary
 ```
 
 Set `VERSIONLENS_LOG=debug` to see parse/fetch logs on stderr.

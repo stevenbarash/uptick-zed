@@ -24,8 +24,17 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/stevenbarash/versionlens-zed"
 
+# Cargo only allows `opt-level`, `codegen-units`, and `strip` to be
+# overridden per-package; `lto` must be top-level. Thin LTO is a
+# compromise: WASM is marginally larger than full-LTO but the LSP
+# release build is much faster to link, and we don't lose meaningful
+# runtime perf.
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
 strip = "symbols"
+
+# The extension is a tiny cdylib shipped as .wasm; trade code-gen time
+# and runtime speed for minimum binary size.
+[profile.release.package.versionlens-zed]
+codegen-units = 1
 opt-level = "z"
