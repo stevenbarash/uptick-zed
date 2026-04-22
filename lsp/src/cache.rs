@@ -34,8 +34,11 @@ impl VersionCache {
     }
 
     pub fn get(&self, kind: ManifestKind, name: &str) -> Option<VersionInfo> {
-        let entry = self.entries.get(&(kind, name.to_owned()))?;
+        let key = (kind, name.to_owned());
+        let entry = self.entries.get(&key)?;
         if entry.at.elapsed() > self.ttl {
+            drop(entry);
+            self.entries.remove(&key);
             return None;
         }
         Some(entry.info.clone())

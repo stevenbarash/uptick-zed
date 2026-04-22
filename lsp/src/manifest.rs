@@ -42,7 +42,7 @@ pub struct RawEntry {
     pub version_literal: String,
     pub version_range: Range,
     pub name_range: Range,
-    /// Optional grouping label, e.g. "dependencies" / "devDependencies" — used
-    /// only for hover messages right now.
-    pub group: Option<String>,
+    /// Grouping label, e.g. "dependencies" / "devDependencies". Always a
+    /// parser-side string literal, so it can be borrowed `'static`.
+    pub group: Option<&'static str>,
 }

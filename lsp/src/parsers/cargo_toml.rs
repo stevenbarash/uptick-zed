@@ -1,13 +1,15 @@
+use std::ops::Range;
+
 use toml_edit::{ImDocument, Item, Value};
 
 use crate::manifest::RawEntry;
+use crate::parsers::trim_matching_quote;
 use crate::position::LineIndex;
 
 const GROUPS: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
 pub fn parse(source: &str) -> Vec<RawEntry> {
-    // `ImDocument` preserves source spans on every value; `DocumentMut` drops
-    // them. We only ever read from the document, so immutable is correct.
+    // `ImDocument` preserves source spans; `DocumentMut` strips them.
     let Ok(doc) = ImDocument::parse(source) else {
         return Vec::new();
     };
@@ -19,8 +21,8 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
             collect_table(&idx, source, table, group, &mut out);
         }
     }
-    // Also support `[target.'cfg(...)'.dependencies]` — only one level deep,
-    // which covers the common case without getting tangled in TOML subtables.
+    // `[target.'cfg(...)'.dependencies]` — one level of nesting, which covers
+    // the common case without getting tangled in arbitrary subtables.
     if let Some(target) = doc.get("target").and_then(Item::as_table) {
         for (_cfg, cfg_item) in target.iter() {
             if let Some(cfg_tbl) = cfg_item.as_table() {
@@ -40,97 +42,59 @@ fn collect_table(
     idx: &LineIndex,
     source: &str,
     table: &toml_edit::Table,
-    group: &str,
+    group: &'static str,
     out: &mut Vec<RawEntry>,
 ) {
     for (key, item) in table.iter() {
-        match item {
+        let span = match item {
             // `serde = "1.0"`
-            Item::Value(v @ Value::String(_)) => {
-                let Some(span) = v.span() else { continue };
-                let (inner, literal) = trim_quotes(source, span);
-                out.push(RawEntry {
-                    name: key.to_string(),
-                    version_literal: literal,
-                    version_range: idx.range(inner),
-                    name_range: name_range(idx, source, table, key),
-                    group: Some(group.to_string()),
-                });
-            }
+            Item::Value(v @ Value::String(_)) => v.span(),
             // `serde = { version = "1.0", features = [...] }`
-            Item::Value(Value::InlineTable(tbl)) => {
-                if let Some(v) = tbl.get("version") {
-                    if matches!(v, Value::String(_)) {
-                        if let Some(span) = v.span() {
-                            let (inner, literal) = trim_quotes(source, span);
-                            out.push(RawEntry {
-                                name: key.to_string(),
-                                version_literal: literal,
-                                version_range: idx.range(inner),
-                                name_range: name_range(idx, source, table, key),
-                                group: Some(group.to_string()),
-                            });
-                        }
-                    }
-                }
-            }
-            Item::Table(sub) => {
-                // `[dependencies.serde]` block-table style.
-                if let Some(Item::Value(v @ Value::String(_))) = sub.get("version") {
-                    if let Some(span) = v.span() {
-                        let (inner, literal) = trim_quotes(source, span);
-                        out.push(RawEntry {
-                            name: key.to_string(),
-                            version_literal: literal,
-                            version_range: idx.range(inner),
-                            name_range: name_range(idx, source, table, key),
-                            group: Some(group.to_string()),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
+            Item::Value(Value::InlineTable(tbl)) => tbl
+                .get("version")
+                .filter(|v| matches!(v, Value::String(_)))
+                .and_then(Value::span),
+            // `[dependencies.serde]` block-table form.
+            Item::Table(sub) => match sub.get("version") {
+                Some(Item::Value(v @ Value::String(_))) => v.span(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(span) = span else { continue };
+        push_entry(out, idx, source, table, key, group, span);
     }
 }
 
-fn trim_quotes(source: &str, span: std::ops::Range<usize>) -> (std::ops::Range<usize>, String) {
-    // `Formatted::span()` includes the surrounding quotes. Strip a single
-    // quote on each side if present; leave everything else alone.
-    let bytes = source.as_bytes();
-    let mut start = span.start;
-    let mut end = span.end;
-    if let Some(&b) = bytes.get(start) {
-        if b == b'"' || b == b'\'' {
-            start += 1;
-        }
-    }
-    if end > start {
-        if let Some(&b) = bytes.get(end - 1) {
-            if b == b'"' || b == b'\'' {
-                end -= 1;
-            }
-        }
-    }
-    let literal = source.get(start..end).unwrap_or("").to_string();
-    (start..end, literal)
-}
-
-fn name_range(
+fn push_entry(
+    out: &mut Vec<RawEntry>,
     idx: &LineIndex,
-    _source: &str,
+    source: &str,
     table: &toml_edit::Table,
     key: &str,
-) -> tower_lsp::lsp_types::Range {
-    // `Table::key()` gives us back the decor+span of the key token.
-    if let Some(k) = table.key(key) {
-        if let Some(span) = k.span() {
-            return idx.range(span);
-        }
-    }
-    // Fallback: a zero-width range at the start of the file. The name_range
-    // is used for hovers only, so this degradation is tolerable.
-    idx.range(0..0)
+    group: &'static str,
+    span: Range<usize>,
+) {
+    // `Value::span()` on a string includes the surrounding quotes.
+    let (inner, literal) = trim_matching_quote(source, span);
+    out.push(RawEntry {
+        name: key.to_string(),
+        version_literal: literal,
+        version_range: idx.range(inner),
+        name_range: name_range(idx, table, key),
+        group: Some(group),
+    });
+}
+
+fn name_range(idx: &LineIndex, table: &toml_edit::Table, key: &str) -> tower_lsp::lsp_types::Range {
+    // `Table::key()` returns the key token with span + decor. Fall back to a
+    // zero-width range at the document start if the span is missing — the
+    // name_range is used only for hovers, so the degradation is harmless.
+    table
+        .key(key)
+        .and_then(|k| k.span())
+        .map(|s| idx.range(s))
+        .unwrap_or_else(|| idx.range(0..0))
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use crate::position::LineIndex;
 /// Extract `{ "name": "version", ... }` pairs from the named top-level
 /// groups of a JSON(C) document. Both `package.json` and `composer.json`
 /// use this shape, just with different group names.
-pub fn parse_deps(source: &str, groups: &[&str]) -> Vec<RawEntry> {
+pub fn parse_deps(source: &str, groups: &[&'static str]) -> Vec<RawEntry> {
     let idx = LineIndex::new(source);
     let parse_result = match parse_to_ast(
         source,
@@ -61,7 +61,7 @@ pub fn parse_deps(source: &str, groups: &[&str]) -> Vec<RawEntry> {
                 version_literal: ver.value.to_string(),
                 version_range: idx.range(inner),
                 name_range: idx.range(name_span.start..name_span.end),
-                group: Some((*group).to_string()),
+                group: Some(*group),
             });
         }
     }

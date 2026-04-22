@@ -35,11 +35,6 @@ pub fn parse_literal(raw: &str) -> Option<Version> {
     Version::parse(strip_leading(raw)).ok()
 }
 
-/// Is this version a stable release (no pre-release suffix)?
-pub fn is_stable(v: &Version) -> bool {
-    v.pre.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

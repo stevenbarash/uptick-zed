@@ -1,20 +1,17 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use reqwest::Client;
 use semver::Version;
 use serde::Deserialize;
 
 use crate::cache::VersionInfo;
 
-/// pub.dev's public API. The `latest.version` field follows the package's
-/// own "max stable" selection. We also walk `versions` for an absolute max
-/// (including prereleases) so `--include-prereleases` mode works.
+/// pub.dev's `latest.version` is the package's own "max stable" — we trust
+/// it directly. We still walk `versions` to compute `latest_any` so a future
+/// prerelease-opt-in mode has somewhere to land, but do it in one pass with
+/// no intermediate allocation.
 pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     let url = format!("https://pub.dev/api/packages/{name}");
-    let resp = client.get(&url).send().await.context("pub.dev request")?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("pub.dev {name}: {}", resp.status()));
-    }
-    let body: Pkg = resp.json().await.context("pub.dev response")?;
+    let body: Pkg = super::get_json(client, "pub.dev", name, &url).await?;
 
     let latest_stable = Version::parse(&body.latest.version).ok();
     let latest_any = body

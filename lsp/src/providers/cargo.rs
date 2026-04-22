@@ -1,19 +1,13 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use reqwest::Client;
 use semver::Version;
 use serde::Deserialize;
 
 use crate::cache::VersionInfo;
 
-/// crates.io API. Requires a descriptive User-Agent — that's set globally
-/// on the shared [`reqwest::Client`] in the server.
 pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     let url = format!("https://crates.io/api/v1/crates/{name}");
-    let resp = client.get(&url).send().await.context("crates.io request")?;
-    if !resp.status().is_success() {
-        return Err(anyhow!("crates.io {name}: {}", resp.status()));
-    }
-    let body: CratesResp = resp.json().await.context("crates.io response")?;
+    let body: CratesResp = super::get_json(client, "crates.io", name, &url).await?;
 
     let latest_stable = body
         .crate_

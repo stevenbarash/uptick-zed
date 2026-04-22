@@ -98,7 +98,7 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
             version_literal: lit,
             version_range,
             name_range,
-            group: Some(group.to_string()),
+            group: Some(group),
         });
     }
 
