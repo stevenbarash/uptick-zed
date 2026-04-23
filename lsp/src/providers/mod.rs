@@ -6,7 +6,7 @@ pub mod pub_dev;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use tokio::sync::Semaphore;
@@ -39,8 +39,7 @@ const CRATES_IO_MIN_INTERVAL: Duration = Duration::from_millis(1100);
 // `std::sync::Mutex`: the crates.io semaphore is 1-wide, so there is no real
 // contention on this lock — we only need a safe way to read/write the last
 // request timestamp. The guard is released before every `.await` below.
-static CRATES_IO_LAST: LazyLock<Mutex<Option<Instant>>> =
-    LazyLock::new(|| Mutex::new(None));
+static CRATES_IO_LAST: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 fn semaphore_for(kind: ManifestKind) -> &'static Semaphore {
     match kind {
