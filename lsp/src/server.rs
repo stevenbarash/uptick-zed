@@ -46,6 +46,7 @@ use crate::manifest::{ManifestKind, RawEntry};
 use crate::parsers;
 use crate::providers;
 use crate::version;
+use crate::vulnerabilities::{cache::VulnCache, Vulnerability};
 
 /// How long a fetched version stays usable before we re-query the registry.
 /// A one-hour window balances freshness against politeness across all four
@@ -76,6 +77,10 @@ const USER_AGENT: &str = concat!(
 struct Annotated {
     entry: RawEntry,
     latest: Option<Version>,
+    /// Vulnerabilities known to affect the parsed `entry.version_literal`.
+    /// Empty means either "no scan yet" or "scan completed and clean"; the
+    /// cache distinguishes these two cases.
+    vulns: Vec<Vulnerability>,
 }
 
 /// Immutable snapshot of one document. We always replace the `Arc` wholesale
@@ -101,6 +106,7 @@ pub struct Backend {
     /// connection-pooled internally, so we want exactly one.
     http: Client,
     cache: Arc<VersionCache>,
+    vuln_cache: Arc<VulnCache>,
     /// Current parsed state of every open document. Keyed by URI.
     docs: Arc<DashMap<Url, Arc<DocState>>>,
     /// Last-pushed fingerprint per doc. Skips the refresh/diagnostics storm
@@ -126,6 +132,7 @@ impl Backend {
             client,
             http,
             cache: Arc::new(VersionCache::new(CACHE_TTL)),
+            vuln_cache: Arc::new(VulnCache::new(CACHE_TTL)),
             docs: Arc::new(DashMap::new()),
             pushed: Arc::new(DashMap::new()),
             pending: Arc::new(DashMap::new()),
@@ -150,7 +157,17 @@ impl Backend {
                     .cache
                     .get(kind, &entry.name)
                     .and_then(|info| info.latest_stable.or(info.latest_any));
-                Annotated { entry, latest }
+                // Look up cached vulns via the lenient parser, same shape
+                // the scanner uses. A `None` parse means "not scannable";
+                // an empty vec means "scan completed and clean".
+                let vulns = crate::version::parse_for_scan(&entry.version_literal)
+                    .and_then(|v| self.vuln_cache.get(kind, &entry.name, &v))
+                    .unwrap_or_default();
+                Annotated {
+                    entry,
+                    latest,
+                    vulns,
+                }
             })
             .collect();
         self.docs
@@ -175,6 +192,7 @@ impl Backend {
         // in) because the task outlives the handler.
         let http = self.http.clone();
         let cache = self.cache.clone();
+        let vuln_cache = self.vuln_cache.clone();
         let docs = self.docs.clone();
         let pushed = self.pushed.clone();
         let pending = self.pending.clone();
@@ -189,7 +207,16 @@ impl Backend {
             // so a concurrent `schedule_resolve` doesn't see a stale handle
             // and try to abort something that's already finished its sleep.
             pending.remove(&uri_key);
-            resolve_and_push(&client, &http, &cache, &docs, &pushed, &uri_key).await;
+            resolve_and_push(
+                &client,
+                &http,
+                &cache,
+                &vuln_cache,
+                &docs,
+                &pushed,
+                &uri_key,
+            )
+            .await;
         });
         self.pending.insert(uri, handle);
     }
@@ -203,6 +230,7 @@ async fn resolve_and_push(
     client: &LspClient,
     http: &Client,
     cache: &Arc<VersionCache>,
+    vuln_cache: &Arc<VulnCache>,
     docs: &DashMap<Url, Arc<DocState>>,
     pushed: &DashMap<Url, u64>,
     uri: &Url,
