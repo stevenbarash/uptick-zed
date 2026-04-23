@@ -147,12 +147,10 @@ Set `UPTICK_LOG=debug` to see parse/fetch logs on stderr.
 - **Rate limiting.** The server uses a single `reqwest` client with a 10-second timeout and a descriptive `User-Agent` (crates.io requires this). Bursts on `didOpen` are implicitly deduped because the cache key is stable.
 - **Prereleases.** Each provider returns `latest_stable` and `latest_any`; today we always prefer stable. A `--include-prereleases` config flag is the natural next step.
 
+## Acknowledgements
+
+Inspired by the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension by Peter Flannery and contributors. Uptick is an independent Rust/Zed implementation and shares no source code with the original; it's not affiliated with or endorsed by the upstream project.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
-
-## Acknowledgements
-
-This project is an independent Rust/Zed port **inspired by** the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension (ISC License, © Peter Flannery and Contributors). It shares **no source code** with the original — every parser, registry provider, and server module here is original work written from scratch.
-
-This project is **not affiliated with or endorsed by** the upstream VersionLens project. See [`NOTICES.md`](NOTICES.md) for the upstream license text.
