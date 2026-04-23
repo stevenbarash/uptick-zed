@@ -25,3 +25,7 @@ target
 
 # Local scratch space (notes, code reviews, drafts)
 scratchpad/
+
+# Compiled WASM extension artifact (produced by `zed: install dev extension`
+# or a local `cargo build --target wasm32-wasip1 --release`).
+extension.wasm
