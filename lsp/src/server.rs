@@ -163,9 +163,10 @@ impl Backend {
     /// pending task for the same URI is aborted so bursts of keystrokes
     /// collapse into a single round-trip.
     fn schedule_resolve(&self, uri: Url, delay: Duration) {
-        // Cancel any prior debounced resolve for this buffer. `abort()` is
-        // a best-effort hint to tokio; the task may still run a few more
-        // statements before it notices, but it won't do any more HTTP work.
+        // Cancel any prior debounced resolve for this buffer. `abort()` only
+        // takes effect at the next `.await`, so an in-flight HTTP request
+        // can still finish — but the task won't advance past the current
+        // suspension point once it does.
         if let Some((_, prev)) = self.pending.remove(&uri) {
             prev.abort();
         }

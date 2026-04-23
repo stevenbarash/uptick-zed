@@ -98,9 +98,9 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
             continue;
         }
 
-        // Skip any whitespace between the colon and the body. YAML allows
-        // `name:value` with no space, but in practice pubspec files always
-        // have one — still, handle both for robustness.
+        // Skip any whitespace between the colon and the body. Pubspec files
+        // always have a single space after the colon, but we tolerate extra
+        // whitespace (or none) without assuming it.
         let after_colon = &rest[colon_rel + 1..];
         let ws = after_colon
             .chars()

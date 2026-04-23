@@ -1,8 +1,6 @@
-//! crates.io client.
-//!
-//! Rate-limiting for this provider is handled in `providers/mod.rs` — we
-//! only need one call per crate, and the shared helper enforces the
-//! crawler policy (≤1 req/sec) for us.
+//! crates.io client. Rate-limiting (≤1 req/sec per the crates.io crawler
+//! policy) lives in [`crate::providers`]; this module just maps one crate
+//! name to a single GET.
 
 use anyhow::Result;
 use reqwest::Client;

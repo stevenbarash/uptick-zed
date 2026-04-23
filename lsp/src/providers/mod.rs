@@ -4,9 +4,9 @@
 //! function. This module hosts:
 //!
 //! - The [`fetch`] dispatcher that routes by `ManifestKind`.
-//! - The shared [`get_json`] helper every provider calls through, which
-//!   handles per-host concurrency caps, crates.io's 1-req/sec rate limit,
-//!   one retry on transient 5xx, and JSON decoding.
+//! - The shared `get_json` helper every provider calls through, which handles
+//!   per-host concurrency caps, crates.io's 1-req/sec rate limit, one retry
+//!   on transient 5xx, and JSON decoding.
 //!
 //! Network policy lives here, not in the individual providers, so we can
 //! change retry/rate-limit behaviour in one place.
@@ -59,9 +59,9 @@ static PACKAGIST_SEM: Semaphore = Semaphore::const_new(8);
 /// below, this enforces a strict ≤1 req/sec globally.
 static CRATES_IO_SEM: Semaphore = Semaphore::const_new(1);
 
-/// Minimum gap between crates.io requests. 1.1s (not 1.0s) leaves some
-/// safety margin against clock jitter and network latency interpreting the
-/// gap unfavourably on the server side.
+/// Minimum gap between crates.io requests. 1.1 s (not 1.0 s) leaves a safety
+/// margin so timer jitter and tokio scheduling slop don't nudge us under the
+/// 1-req/sec ceiling.
 const CRATES_IO_MIN_INTERVAL: Duration = Duration::from_millis(1100);
 
 /// Timestamp of the last crates.io request (or `None` if we haven't made one).

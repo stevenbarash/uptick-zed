@@ -63,14 +63,15 @@ impl VersionCache {
     /// callers can't tell the difference because they don't need to — either
     /// way the answer is "fetch it".
     pub fn get(&self, kind: ManifestKind, name: &str) -> Option<VersionInfo> {
-        // `DashMap` keys need to own their components (the internal hash is
-        // computed over `(&K,)` so we can't borrow the tuple here).
+        // The key type is `(ManifestKind, String)`, and `Borrow` doesn't let
+        // us look up via `(ManifestKind, &str)` without a wrapper — so we
+        // allocate the owned tuple once per lookup.
         let key = (kind, name.to_owned());
         let entry = self.entries.get(&key)?;
 
         // Lazy eviction: if the entry has gone stale, drop it and report a
-        // miss. We must `drop(entry)` first because `remove` would deadlock
-        // against the read guard we're still holding.
+        // miss. We must drop the read guard before calling `remove`, which
+        // needs the shard's write lock and would otherwise block on us.
         if entry.at.elapsed() > self.ttl {
             drop(entry);
             self.entries.remove(&key);

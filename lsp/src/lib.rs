@@ -18,9 +18,9 @@
 //! - [`version`] — small semver helpers for stripping range operators and
 //!   checking whether a latest version satisfies a user range.
 //!
-//! Everything is re-exported as `pub mod` so integration tests / external
-//! consumers can reach into individual modules without going through the
-//! full LSP event loop.
+//! All modules are declared `pub` so integration tests and external
+//! consumers can reach into them directly without going through the full
+//! LSP event loop.
 
 pub mod cache;
 pub mod manifest;

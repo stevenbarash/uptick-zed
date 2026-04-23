@@ -38,8 +38,8 @@ pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
 }
 
 /// Minimal payload shape from `/{pkg}/latest`. We only need the version;
-/// the real document has dozens of fields (maintainers, dist, etc.) that
-/// `serde` happily ignores thanks to the default `deny_unknown_fields = false`.
+/// the real document has dozens of fields (maintainers, dist, etc.) and
+/// `serde` ignores anything not listed here by default.
 #[derive(Deserialize)]
 struct Latest {
     version: String,
