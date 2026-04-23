@@ -17,6 +17,7 @@
 //!   everything together.
 //! - [`version`] — small semver helpers for stripping range operators and
 //!   checking whether a latest version satisfies a user range.
+//! - [`vulnerabilities`] — OSV vulnerability scanner parallel to providers.
 //!
 //! All modules are declared `pub` so integration tests and external
 //! consumers can reach into them directly without going through the full
@@ -29,3 +30,4 @@ pub mod position;
 pub mod providers;
 pub mod server;
 pub mod version;
+pub mod vulnerabilities;

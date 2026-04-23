@@ -59,6 +59,46 @@ pub fn parse_literal(raw: &str) -> Option<Version> {
     Version::parse(strip_leading(raw)).ok()
 }
 
+/// Lenient parser used by the OSV vulnerability scanner.
+///
+/// Unlike `parse_literal`, this function accepts npm-style shorthand and
+/// range literals by normalising them to a concrete floor version: `^1.2`
+/// becomes `1.2.0`, `1.x` becomes `1.0.0`, `>=1.0 <2.0` becomes `1.0.0`.
+/// Returns `None` for literals that don't have an identifiable numeric
+/// component (`latest`, `file:…`, `github:…`, bare `*`/`x`, empty).
+///
+/// See spec: docs/superpowers/specs/2026-04-23-osv-vulnerability-scanner-design.md
+pub fn parse_for_scan(raw: &str) -> Option<Version> {
+    let stripped = strip_leading(raw);
+
+    let narrow_end = stripped
+        .bytes()
+        .position(|b| matches!(b, b' ' | b'\t' | b'|' | b','))
+        .unwrap_or(stripped.len());
+    let narrowed = &stripped[..narrow_end];
+
+    if narrowed.is_empty() {
+        return None;
+    }
+    if narrowed.chars().all(|c| matches!(c, '*' | 'x' | 'X' | '.')) {
+        return None;
+    }
+
+    let mut parts: Vec<String> = narrowed
+        .split('.')
+        .map(|p| match p {
+            "*" | "x" | "X" => "0".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    while parts.len() < 3 {
+        parts.push("0".to_string());
+    }
+
+    let rebuilt = parts.join(".");
+    Version::parse(&rebuilt).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +120,113 @@ mod tests {
         let v = Version::parse("1.4.0").unwrap();
         assert!(satisfies("^1.2.3", &v));
         assert!(!satisfies("^2.0.0", &v));
+    }
+
+    #[test]
+    fn scan_caret_full() {
+        assert_eq!(
+            parse_for_scan("^1.2.3"),
+            Some(Version::parse("1.2.3").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_caret_missing_patch() {
+        assert_eq!(
+            parse_for_scan("^1.2"),
+            Some(Version::parse("1.2.0").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_tilde_missing_minor_patch() {
+        assert_eq!(parse_for_scan("~1"), Some(Version::parse("1.0.0").unwrap()));
+    }
+
+    #[test]
+    fn scan_wildcard_patch() {
+        assert_eq!(
+            parse_for_scan("1.2.x"),
+            Some(Version::parse("1.2.0").unwrap())
+        );
+        assert_eq!(
+            parse_for_scan("1.2.*"),
+            Some(Version::parse("1.2.0").unwrap())
+        );
+        assert_eq!(
+            parse_for_scan("1.2.X"),
+            Some(Version::parse("1.2.0").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_wildcard_minor() {
+        assert_eq!(
+            parse_for_scan("1.x"),
+            Some(Version::parse("1.0.0").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_compound_range() {
+        assert_eq!(
+            parse_for_scan(">=1.0 <2.0"),
+            Some(Version::parse("1.0.0").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_hyphen_range() {
+        assert_eq!(
+            parse_for_scan("1.2.3 - 2.3.4"),
+            Some(Version::parse("1.2.3").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_or_range() {
+        assert_eq!(
+            parse_for_scan("1.2.3 || 2.0.0"),
+            Some(Version::parse("1.2.3").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_prerelease_preserved() {
+        assert_eq!(
+            parse_for_scan("1.2.3-beta.1"),
+            Some(Version::parse("1.2.3-beta.1").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_build_metadata_preserved() {
+        assert_eq!(
+            parse_for_scan("1.2.3+build.5"),
+            Some(Version::parse("1.2.3+build.5").unwrap())
+        );
+    }
+
+    #[test]
+    fn scan_bare_wildcard_rejected() {
+        assert_eq!(parse_for_scan("*"), None);
+        assert_eq!(parse_for_scan("x"), None);
+        assert_eq!(parse_for_scan("X"), None);
+        assert_eq!(parse_for_scan(""), None);
+    }
+
+    #[test]
+    fn scan_non_semver_rejected() {
+        assert_eq!(parse_for_scan("latest"), None);
+        assert_eq!(parse_for_scan("file:../foo"), None);
+        assert_eq!(parse_for_scan("github:user/repo"), None);
+    }
+
+    #[test]
+    fn scan_with_v_prefix() {
+        assert_eq!(
+            parse_for_scan("v1.2.3"),
+            Some(Version::parse("1.2.3").unwrap())
+        );
     }
 }
