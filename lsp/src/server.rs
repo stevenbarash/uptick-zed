@@ -243,8 +243,10 @@ async fn resolve_and_push(
     };
     let kind = state.kind;
 
-    // Deduplicate names — a package could appear in both `dependencies` and
-    // `devDependencies`, but we only need to fetch its version once.
+    // --- Phase 1: version fetches (existing behavior) ---
+    //
+    // Deduplicate names — a package could appear in both `dependencies`
+    // and `devDependencies`, but we only need to fetch its version once.
     let to_fetch: HashSet<String> = state
         .entries
         .iter()
@@ -254,10 +256,6 @@ async fn resolve_and_push(
 
     if !to_fetch.is_empty() {
         use futures::StreamExt;
-        // FuturesUnordered lets every fetch start immediately and complete
-        // in whatever order the network returns them in. Per-host rate
-        // limits live inside `providers::get_json`, so we don't have to
-        // coordinate here.
         let mut futs = futures::stream::FuturesUnordered::new();
         for name in to_fetch {
             let http = http.clone();
@@ -266,32 +264,76 @@ async fn resolve_and_push(
         while let Some((name, res)) = futs.next().await {
             match res {
                 Ok(info) => cache.put(kind, name, info),
-                // Failures are logged but never fatal — we'll retry on the
-                // next keystroke. Users see the existing stale/empty hint
-                // until then.
                 Err(e) => warn!(?name, "registry lookup failed: {e:#}"),
             }
         }
+    }
 
-        // Re-fold the cache contents back into the doc state so handlers
-        // see fresh `latest` values. `alter` is a no-op if the doc has been
-        // closed in the meantime — a `did_close` landing during the fetch
-        // must not resurrect the document.
-        docs.alter(uri, |_, existing| {
-            let mut new_entries = existing.entries.clone();
-            for a in &mut new_entries {
-                if a.latest.is_none() {
-                    if let Some(info) = cache.get(kind, &a.entry.name) {
-                        a.latest = info.latest_stable.or(info.latest_any);
-                    }
+    // --- Phase 2: OSV vulnerability scans ---
+    //
+    // For every entry whose literal parses to a concrete version, consult
+    // the vuln cache. Anything missing gets scanned in parallel. We never
+    // overwrite a cache hit with a failed scan — an error is logged and
+    // treated as "retry next keystroke".
+    //
+    // Size hints: every entry is a potential scan target at most, so
+    // over-allocating once avoids growth reallocations during collection.
+    let mut scan_targets: Vec<(String, Version)> = Vec::with_capacity(state.entries.len());
+    let mut seen: HashSet<(String, Version)> = HashSet::with_capacity(state.entries.len());
+    for a in &state.entries {
+        if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
+            if seen.insert((a.entry.name.clone(), ver.clone()))
+                && vuln_cache.get(kind, &a.entry.name, &ver).is_none()
+            {
+                scan_targets.push((a.entry.name.clone(), ver));
+            }
+        }
+    }
+
+    if !scan_targets.is_empty() {
+        use futures::StreamExt;
+        let mut futs = futures::stream::FuturesUnordered::new();
+        for (name, ver) in scan_targets {
+            let http = http.clone();
+            futs.push(async move {
+                let res = crate::vulnerabilities::fetch_vulns(&http, kind, &name, &ver).await;
+                (name, ver, res)
+            });
+        }
+        while let Some((name, ver, res)) = futs.next().await {
+            match res {
+                Ok(vulns) => vuln_cache.put(kind, name, ver, vulns),
+                Err(e) => warn!(?name, version = %ver, "OSV scan failed: {e:#}"),
+            }
+        }
+    }
+
+    // --- Fold both results back into DocState ---
+    //
+    // `alter` is a no-op if the doc has been closed in the meantime — a
+    // `did_close` landing during the fetch must not resurrect the doc.
+    docs.alter(uri, |_, existing| {
+        let mut new_entries = existing.entries.clone();
+        for a in &mut new_entries {
+            if a.latest.is_none() {
+                if let Some(info) = cache.get(kind, &a.entry.name) {
+                    a.latest = info.latest_stable.or(info.latest_any);
                 }
             }
-            Arc::new(DocState {
-                kind: existing.kind,
-                entries: new_entries,
-            })
-        });
-    }
+            if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
+                if let Some(mut vulns) = vuln_cache.get(kind, &a.entry.name, &ver) {
+                    // Sort so the fingerprint is deterministic regardless of
+                    // scan-completion order.
+                    vulns.sort_by(|x, y| x.id.cmp(&y.id));
+                    a.vulns = vulns;
+                }
+            }
+        }
+        Arc::new(DocState {
+            kind: existing.kind,
+            entries: new_entries,
+        })
+    });
 
     push_updates_raw(client, docs, pushed, uri).await;
 }
