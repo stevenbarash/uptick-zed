@@ -9,6 +9,11 @@
 pub mod cache;
 pub mod osv;
 
+use anyhow::Result;
+use reqwest::Client;
+use semver::Version;
+use tokio::sync::Semaphore;
+
 use crate::manifest::ManifestKind;
 
 /// A single vulnerability entry as surfaced to the server.
@@ -41,14 +46,32 @@ pub fn osv_ecosystem(kind: ManifestKind) -> &'static str {
     }
 }
 
+/// Parallelism cap for OSV requests. Conservative default — OSV publishes
+/// no explicit rate limit. Raise if scans become noticeably serialised.
+static OSV_SEM: Semaphore = Semaphore::const_new(8);
+
+/// Query OSV for vulnerabilities affecting `(kind, name, version)`.
+///
+/// Thin wrapper around `osv::query` that (a) maps the `ManifestKind` to an
+/// OSV ecosystem string and (b) bounds concurrency via the module-level
+/// semaphore. Caching is the caller's responsibility.
+pub async fn fetch_vulns(
+    client: &Client,
+    kind: ManifestKind,
+    name: &str,
+    version: &Version,
+) -> Result<Vec<Vulnerability>> {
+    let _permit = OSV_SEM.acquire().await.expect("OSV semaphore");
+    let ecosystem = osv_ecosystem(kind);
+    osv::query(client, ecosystem, name, &version.to_string()).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn ecosystem_map_exhaustive() {
-        // Exhaustive by construction (match on Copy enum); these assertions
-        // catch accidental string typos during refactors.
         assert_eq!(osv_ecosystem(ManifestKind::Cargo), "crates.io");
         assert_eq!(osv_ecosystem(ManifestKind::Npm), "npm");
         assert_eq!(osv_ecosystem(ManifestKind::Composer), "Packagist");
