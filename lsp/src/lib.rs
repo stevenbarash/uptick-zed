@@ -1,3 +1,27 @@
+//! # uptick-lsp
+//!
+//! A standalone LSP server that surfaces "latest available version" hints for
+//! package manifests. It speaks LSP over stdio, so any editor that supports
+//! LSP — Zed, Neovim, Helix, VS Code — can use it.
+//!
+//! ## Module layout
+//!
+//! - [`cache`] — thread-safe TTL cache keyed by (ecosystem, package name).
+//! - [`manifest`] — the `ManifestKind` enum that drives dispatch, plus the
+//!   `RawEntry` struct each parser produces.
+//! - [`parsers`] — format-specific parsers (one per ecosystem). Each returns
+//!   a `Vec<RawEntry>` with source positions.
+//! - [`position`] — `LineIndex`: byte-offset → LSP `Position` conversion.
+//! - [`providers`] — registry HTTP clients (one per ecosystem).
+//! - [`server`] — the `tower-lsp` `LanguageServer` implementation that ties
+//!   everything together.
+//! - [`version`] — small semver helpers for stripping range operators and
+//!   checking whether a latest version satisfies a user range.
+//!
+//! Everything is re-exported as `pub mod` so integration tests / external
+//! consumers can reach into individual modules without going through the
+//! full LSP event loop.
+
 pub mod cache;
 pub mod manifest;
 pub mod parsers;
