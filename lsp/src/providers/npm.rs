@@ -27,8 +27,7 @@ pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     let url = format!("https://registry.npmjs.org/{path}/latest");
     let body: Latest = super::get_json(client, ManifestKind::Npm, name, &url).await?;
     // `/latest` returns only the current stable release, so `latest_stable`
-    // and `latest_any` are the same value. A future prerelease-opt-in mode
-    // would need to switch to the `/{pkg}` full doc.
+    // and `latest_any` are the same value.
     let latest = Version::parse(&body.version).ok();
     Ok(VersionInfo {
         latest_stable: latest.clone(),

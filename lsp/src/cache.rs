@@ -19,15 +19,12 @@ use crate::manifest::ManifestKind;
 /// because our semver parser rejects some exotic version strings.
 #[derive(Debug, Clone)]
 pub struct VersionInfo {
-    /// Highest version with an empty pre-release tag. This is what we display
-    /// today — stable releases only.
+    /// Highest version with an empty pre-release tag.
     pub latest_stable: Option<Version>,
-    /// Highest version overall, including pre-releases. Stashed for a future
-    /// `--include-prereleases` opt-in.
+    /// Highest version overall, including pre-releases.
     pub latest_any: Option<Version>,
     /// Canonical registry URL for the package (used for the hover "registry"
-    /// link). `None` if we haven't computed one, but in practice every
-    /// provider fills this in.
+    /// link).
     pub url: Option<String>,
 }
 
@@ -51,7 +48,6 @@ pub struct VersionCache {
 }
 
 impl VersionCache {
-    /// Create an empty cache with the given freshness window.
     pub fn new(ttl: Duration) -> Self {
         Self {
             entries: DashMap::new(),
@@ -83,7 +79,7 @@ impl VersionCache {
         Some(entry.info.clone())
     }
 
-    /// Insert or overwrite a package's metadata. Resets the TTL timer.
+    /// Resets the TTL timer on the entry.
     pub fn put(&self, kind: ManifestKind, name: String, info: VersionInfo) {
         self.entries.insert(
             (kind, name),

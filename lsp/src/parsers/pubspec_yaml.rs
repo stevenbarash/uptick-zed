@@ -57,7 +57,6 @@ pub fn parse(source: &str) -> Vec<RawEntry> {
         // (not bytes) is safe because leading spaces are single-byte ASCII.
         let leading = line.chars().take_while(|c| *c == ' ').count();
         let rest = &line[leading..];
-        // Blank lines and full-line comments don't change any state.
         if rest.is_empty() || rest.starts_with('#') {
             continue;
         }

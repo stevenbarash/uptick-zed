@@ -28,8 +28,6 @@ mod tests {
 
     #[test]
     fn reads_dependencies_and_dev_dependencies() {
-        // Covers the happy path: both `dependencies` and `devDependencies`
-        // are walked, and the literal value survives round-trip.
         let src = indoc! {r#"
             {
               "name": "demo",
@@ -50,8 +48,7 @@ mod tests {
 
     #[test]
     fn tolerates_trailing_commas_and_comments() {
-        // Real editors let users write JSONC; our parser must not choke on
-        // it. This is why `json_common` opts into all the permissive flags.
+        // `json_common` opts into the permissive flags that make this work.
         let src = r#"{
   // comment
   "dependencies": {
@@ -64,9 +61,6 @@ mod tests {
 
     #[test]
     fn ignores_non_string_version_values() {
-        // Some packages embed objects where strings belong (e.g. monorepo
-        // tools). We skip those rather than guess — there's no single
-        // upstream version to resolve against.
         let src = r#"{ "dependencies": { "weird": { "version": "1.0.0" } } }"#;
         let entries = parse(src);
         assert!(entries.is_empty());

@@ -2,8 +2,7 @@
 //!
 //! The `/api/packages/{name}` endpoint gives us a `latest` shortcut plus a
 //! full list of `versions`. We trust `latest` for stable releases and walk
-//! `versions` once to compute the overall max (including prereleases) for
-//! future prerelease-opt-in.
+//! `versions` once to compute the overall max (including prereleases).
 
 use anyhow::Result;
 use reqwest::Client;
@@ -14,9 +13,8 @@ use crate::cache::VersionInfo;
 use crate::manifest::ManifestKind;
 
 /// pub.dev's `latest.version` is the package's own "max stable" — we trust
-/// it directly. We still walk `versions` to compute `latest_any` so a future
-/// prerelease-opt-in mode has somewhere to land, but do it in one pass with
-/// no intermediate allocation.
+/// it directly. We compute `latest_any` in one pass over `versions` with no
+/// intermediate allocation.
 pub async fn fetch(client: &Client, name: &str) -> Result<VersionInfo> {
     let url = format!("https://pub.dev/api/packages/{name}");
     let body: Pkg = super::get_json(client, ManifestKind::Pub, name, &url).await?;

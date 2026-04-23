@@ -65,8 +65,8 @@ impl ManifestKind {
 /// This is the common currency between parsing and the server: every parser
 /// produces a `Vec<RawEntry>`, and the server knows nothing about the
 /// original file format afterwards. Ranges are already converted to LSP
-/// coordinates (UTF-16 columns), so the server can hand them back verbatim
-/// in inlay hints, diagnostics, and workspace edits.
+/// coordinates, so the server can hand them back verbatim in inlay hints,
+/// diagnostics, and workspace edits.
 #[derive(Debug, Clone)]
 pub struct RawEntry {
     /// Package name exactly as it appears in the manifest (including any

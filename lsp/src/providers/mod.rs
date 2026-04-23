@@ -83,9 +83,7 @@ fn semaphore_for(kind: ManifestKind) -> &'static Semaphore {
     }
 }
 
-/// Shared registry-call helper. Applies per-host concurrency limits (and
-/// crates.io's 1-req/sec rate limit), performs the GET, retries once on a
-/// transient 5xx, and decodes JSON on success. `kind` and `name` are threaded
+/// See module docs for network policy. `kind` and `name` are threaded
 /// into every error message so failures point at the right package.
 pub(crate) async fn get_json<T: DeserializeOwned>(
     client: &Client,

@@ -1,20 +1,6 @@
 //! The LSP server itself — the `tower-lsp` `LanguageServer` impl that
 //! glues parsers, providers, cache, and the editor together.
 //!
-//! # Lifecycle
-//!
-//! 1. `initialize` — advertise capabilities.
-//! 2. `did_open` — parse the buffer, fetch any uncached registry data, then
-//!    publish diagnostics + refresh hints.
-//! 3. `did_change` — same as open, but with a 250 ms debounce so a burst of
-//!    keystrokes collapses into one round-trip.
-//! 4. `inlay_hint` — cheap: read from `DocState` and emit LSP hints.
-//! 5. `hover` — cheap: read from `DocState`, render markdown.
-//! 6. `code_action` — cheap: produce `Bump to X.Y.Z` edits for entries whose
-//!    latest is ahead of their current literal.
-//! 7. `did_close` — abort any pending resolve, drop the doc state, and clear
-//!    diagnostics.
-//!
 //! # Concurrency model
 //!
 //! - One `Arc<DashMap>` per kind of state (docs, pushed fingerprints,
@@ -670,7 +656,7 @@ impl LanguageServer for Backend {
                 }),
                 command: None,
                 // `is_preferred` tells the editor to highlight this as the
-                // default action — handy for `cmd-.` → Enter shortcuts.
+                // default action.
                 is_preferred: Some(true),
                 disabled: None,
                 data: None,
@@ -689,9 +675,6 @@ impl LanguageServer for Backend {
 
 /// Returns `true` if `pos` lies inside `range`. Both ends are inclusive,
 /// which matches how LSP clients typically hit-test hover positions.
-///
-/// The logic: `pos` is after-or-at the start AND before-or-at the end,
-/// handling line/column lexicographically.
 fn contains(range: &Range, pos: Position) -> bool {
     (range.start.line < pos.line
         || (range.start.line == pos.line && range.start.character <= pos.character))

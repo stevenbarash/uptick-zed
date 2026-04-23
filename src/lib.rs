@@ -21,7 +21,6 @@ struct UptickExtension;
 
 impl zed::Extension for UptickExtension {
     fn new() -> Self {
-        // Nothing to initialise — construction is effectively free.
         Self
     }
 
@@ -40,8 +39,7 @@ impl zed::Extension for UptickExtension {
         // We intentionally do *not* bundle the LSP binary into the WASM
         // component: the WASM sandbox can't make outbound HTTP calls, and
         // shipping platform-specific binaries inside a WASM file would mean
-        // every user downloads every target. Binary distribution via GitHub
-        // releases is a known follow-up.
+        // every user downloads every target.
         let path = worktree.which("uptick-lsp").ok_or_else(|| {
             // Surface a clear, actionable error inside Zed's UI if the user
             // installed the extension but not the binary.
