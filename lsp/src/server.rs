@@ -365,6 +365,11 @@ fn fingerprint(state: &DocState) -> u64 {
                 v.build.as_str().hash(&mut h);
             }
         }
+        // Vulns are sorted by id at fold time, so this hash is stable.
+        a.vulns.len().hash(&mut h);
+        for v in &a.vulns {
+            v.id.hash(&mut h);
+        }
     }
     h.finish()
 }
