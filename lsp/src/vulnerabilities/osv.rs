@@ -75,9 +75,7 @@ pub async fn query(
         .with_context(|| format!("osv.dev request for {ecosystem}/{name}@{version}"))?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(anyhow!(
-            "osv.dev {ecosystem}/{name}@{version}: {status}"
-        ));
+        return Err(anyhow!("osv.dev {ecosystem}/{name}@{version}: {status}"));
     }
     let parsed: OsvQueryResponse = resp
         .json()
@@ -113,7 +111,10 @@ mod tests {
         let r: OsvQueryResponse = serde_json::from_str(TWO_VULNS).unwrap();
         assert_eq!(r.vulns.len(), 2);
         assert_eq!(r.vulns[0].id, "GHSA-jf85-cpcp-j695");
-        assert_eq!(r.vulns[0].summary.as_deref(), Some("Prototype Pollution in lodash"));
+        assert_eq!(
+            r.vulns[0].summary.as_deref(),
+            Some("Prototype Pollution in lodash")
+        );
         assert!(r.vulns[0].details.is_some());
         assert_eq!(r.vulns[1].details, None);
     }
@@ -138,6 +139,9 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].id, "GHSA-jf85-cpcp-j695");
         assert_eq!(v[0].modified, "2021-05-06T00:00:00Z");
-        assert_eq!(v[0].summary.as_deref(), Some("Prototype Pollution in lodash"));
+        assert_eq!(
+            v[0].summary.as_deref(),
+            Some("Prototype Pollution in lodash")
+        );
     }
 }
