@@ -405,32 +405,51 @@ async fn push_updates_raw(
     let _ = client.code_lens_refresh().await;
 }
 
-/// Produce `Information`-level diagnostics for every entry whose latest is
-/// newer than — and doesn't satisfy — the user's current range.
+/// Produce diagnostics for every entry: `Information`-level for update
+/// availability, and `Warning`-level for known vulnerabilities.
 fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for a in &state.entries {
-        let Some(latest) = &a.latest else { continue };
-        // If the user's range already accepts `latest`, there's nothing
-        // actionable to report.
-        if version::satisfies(&a.entry.version_literal, latest) {
-            continue;
-        }
-        // Pinned prereleases or locally-built tip can be `>= latest`; don't
-        // nag the user about "updates" that would actually downgrade.
-        if let Some(cur) = version::parse_literal(&a.entry.version_literal) {
-            if &cur >= latest {
-                continue;
+        let name = &a.entry.name;
+
+        // --- Existing update-available diagnostic (preserved) ---
+        //
+        // Emit only when: latest resolved, literal doesn't already satisfy
+        // it, and (if the literal parsed) cur < latest. `is_none_or`
+        // (Rust 1.82+) covers the "didn't parse" case without a two-arg
+        // closure.
+        if let Some(latest) = &a.latest {
+            if !version::satisfies(&a.entry.version_literal, latest)
+                && version::parse_literal(&a.entry.version_literal).is_none_or(|cur| &cur < latest)
+            {
+                out.push(Diagnostic {
+                    range: a.entry.version_range,
+                    severity: Some(DiagnosticSeverity::INFORMATION),
+                    source: Some(DIAGNOSTIC_SOURCE.into()),
+                    code: Some(NumberOrString::String("update-available".into())),
+                    message: format!("{name}: newer version {latest} is available"),
+                    ..Default::default()
+                });
             }
         }
-        out.push(Diagnostic {
-            range: a.entry.version_range,
-            severity: Some(DiagnosticSeverity::INFORMATION),
-            source: Some(DIAGNOSTIC_SOURCE.into()),
-            code: Some(NumberOrString::String("update-available".into())),
-            message: format!("{}: newer version {} is available", a.entry.name, latest),
-            ..Default::default()
-        });
+
+        // --- New: OSV vulnerability diagnostics ---
+        for v in &a.vulns {
+            let message = v
+                .summary
+                .as_deref()
+                .or(v.details.as_deref())
+                .unwrap_or("(no description)");
+            let id = &v.id;
+            out.push(Diagnostic {
+                range: a.entry.version_range,
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some(DIAGNOSTIC_SOURCE.into()),
+                code: Some(NumberOrString::String(v.id.clone())),
+                message: format!("{id}: {message}"),
+                ..Default::default()
+            });
+        }
     }
     out
 }
