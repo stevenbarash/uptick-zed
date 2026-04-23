@@ -48,8 +48,8 @@ use crate::providers;
 use crate::version;
 
 /// How long a fetched version stays usable before we re-query the registry.
-/// npm moves fast but a one-hour window is a reasonable balance between
-/// freshness and politeness to upstream.
+/// A one-hour window balances freshness against politeness across all four
+/// registries.
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 
 /// Debounce window applied to `did_change`. Short enough that users see
@@ -163,10 +163,9 @@ impl Backend {
     /// pending task for the same URI is aborted so bursts of keystrokes
     /// collapse into a single round-trip.
     fn schedule_resolve(&self, uri: Url, delay: Duration) {
-        // Cancel any prior debounced resolve for this buffer. `abort()` only
-        // takes effect at the next `.await`, so an in-flight HTTP request
-        // can still finish — but the task won't advance past the current
-        // suspension point once it does.
+        // Cancel any prior debounced resolve for this buffer. `abort()`
+        // cancels the task at its next `.await` — any in-flight future is
+        // dropped, not awaited to completion.
         if let Some((_, prev)) = self.pending.remove(&uri) {
             prev.abort();
         }

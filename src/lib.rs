@@ -41,7 +41,7 @@ impl zed::Extension for UptickExtension {
         // component: the WASM sandbox can't make outbound HTTP calls, and
         // shipping platform-specific binaries inside a WASM file would mean
         // every user downloads every target. Binary distribution via GitHub
-        // releases is tracked in the v0.2 roadmap.
+        // releases is a known follow-up.
         let path = worktree.which("uptick-lsp").ok_or_else(|| {
             // Surface a clear, actionable error inside Zed's UI if the user
             // installed the extension but not the binary.
