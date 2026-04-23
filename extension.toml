@@ -1,11 +1,11 @@
-id = "versionlens"
-name = "VersionLens"
+id = "uptick"
+name = "Uptick"
 version = "0.1.0"
 schema_version = 1
-description = "Shows the latest version of each package inline in package.json, Cargo.toml, pubspec.yaml, and composer.json. Port of the VSCode VersionLens extension."
+description = "Shows the latest version of each package inline in package.json, Cargo.toml, pubspec.yaml, and composer.json."
 authors = ["Steven Barash"]
-repository = "https://github.com/stevenbarash/versionlens-zed"
+repository = "https://github.com/stevenbarash/uptick-zed"
 
-[language_servers.versionlens]
-name = "VersionLens"
+[language_servers.uptick]
+name = "Uptick"
 languages = ["JSON", "JSONC", "TOML", "YAML"]

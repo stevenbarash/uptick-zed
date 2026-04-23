@@ -1,5 +1,5 @@
 [package]
-name = "versionlens-lsp"
+name = "uptick-lsp"
 description = "Language server that surfaces the latest available version of each dependency in package.json, Cargo.toml, pubspec.yaml, and composer.json."
 version.workspace = true
 edition.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "versionlens-lsp"
+name = "uptick-lsp"
 path = "src/main.rs"
 
 [lib]

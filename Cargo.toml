@@ -1,5 +1,5 @@
 [package]
-name = "versionlens-zed"
+name = "uptick-zed"
 description = "Zed extension that shows the latest version of each dependency in package.json, Cargo.toml, pubspec.yaml, and composer.json."
 version.workspace = true
 edition.workspace = true
@@ -22,7 +22,7 @@ members = ["lsp"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/stevenbarash/versionlens-zed"
+repository = "https://github.com/stevenbarash/uptick-zed"
 
 # Cargo only allows `opt-level`, `codegen-units`, and `strip` to be
 # overridden per-package; `lto` must be top-level. Thin LTO is a
@@ -35,6 +35,6 @@ strip = "symbols"
 
 # The extension is a tiny cdylib shipped as .wasm; trade code-gen time
 # and runtime speed for minimum binary size.
-[profile.release.package.versionlens-zed]
+[profile.release.package.uptick-zed]
 codegen-units = 1
 opt-level = "z"
