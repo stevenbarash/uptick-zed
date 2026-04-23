@@ -69,22 +69,14 @@ pub fn parse_literal(raw: &str) -> Option<Version> {
 ///
 /// See spec: docs/superpowers/specs/2026-04-23-osv-vulnerability-scanner-design.md
 pub fn parse_for_scan(raw: &str) -> Option<Version> {
-    // 1. Strip leading operators and whitespace. Reuses the helper that
-    //    already handles `^`, `~`, `>=`, `=`, `v`, etc.
     let stripped = strip_leading(raw);
 
-    // 2. Narrow to the first alternative: slice off everything from the
-    //    first whitespace, `|`, or `,` byte. Handles compound ranges
-    //    (`>=1.0 <2.0`), hyphen ranges (`1.2.3 - 2.3.4`), OR ranges
-    //    (`1.2.3 || 2.0.0`), and Composer AND ranges (`1.0,2.0`).
     let narrow_end = stripped
         .bytes()
         .position(|b| matches!(b, b' ' | b'\t' | b'|' | b','))
         .unwrap_or(stripped.len());
     let narrowed = &stripped[..narrow_end];
 
-    // 3. Bail if nothing remains or the result is a pure wildcard. This is
-    //    the guard for bare `*`, `x`, `X`, and empty input.
     if narrowed.is_empty() {
         return None;
     }
@@ -92,8 +84,6 @@ pub fn parse_for_scan(raw: &str) -> Option<Version> {
         return None;
     }
 
-    // 4. Split into dot components, replace wildcards with "0", pad to
-    //    three components with "0".
     let mut parts: Vec<String> = narrowed
         .split('.')
         .map(|p| match p {
@@ -105,9 +95,6 @@ pub fn parse_for_scan(raw: &str) -> Option<Version> {
         parts.push("0".to_string());
     }
 
-    // 5. Only the first three components are "core" semver; keep any
-    //    trailing components (e.g. a `+build.5` on part 2) by joining the
-    //    whole thing back. The semver crate will do the final validation.
     let rebuilt = parts.join(".");
     Version::parse(&rebuilt).ok()
 }

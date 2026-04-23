@@ -78,8 +78,6 @@ struct Annotated {
     entry: RawEntry,
     latest: Option<Version>,
     /// Vulnerabilities known to affect the parsed `entry.version_literal`.
-    /// Empty means either "no scan yet" or "scan completed and clean"; the
-    /// cache distinguishes these two cases.
     vulns: Vec<Vulnerability>,
 }
 
@@ -157,9 +155,6 @@ impl Backend {
                     .cache
                     .get(kind, &entry.name)
                     .and_then(|info| info.latest_stable.or(info.latest_any));
-                // Look up cached vulns via the lenient parser, same shape
-                // the scanner uses. A `None` parse means "not scannable";
-                // an empty vec means "scan completed and clean".
                 let vulns = crate::version::parse_for_scan(&entry.version_literal)
                     .and_then(|v| self.vuln_cache.get(kind, &entry.name, &v))
                     .unwrap_or_default();
@@ -243,8 +238,6 @@ async fn resolve_and_push(
     };
     let kind = state.kind;
 
-    // --- Phase 1: version fetches (existing behavior) ---
-    //
     // Deduplicate names — a package could appear in both `dependencies`
     // and `devDependencies`, but we only need to fetch its version once.
     let to_fetch: HashSet<String> = state
@@ -412,12 +405,9 @@ fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
     for a in &state.entries {
         let name = &a.entry.name;
 
-        // --- Existing update-available diagnostic (preserved) ---
-        //
         // Emit only when: latest resolved, literal doesn't already satisfy
-        // it, and (if the literal parsed) cur < latest. `is_none_or`
-        // (Rust 1.82+) covers the "didn't parse" case without a two-arg
-        // closure.
+        // it, and (if the literal parsed) cur < latest. `is_none_or` covers
+        // the "didn't parse" case.
         if let Some(latest) = &a.latest {
             if !version::satisfies(&a.entry.version_literal, latest)
                 && version::parse_literal(&a.entry.version_literal).is_none_or(|cur| &cur < latest)
@@ -433,7 +423,6 @@ fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
             }
         }
 
-        // --- New: OSV vulnerability diagnostics ---
         for v in &a.vulns {
             let message = v
                 .summary
