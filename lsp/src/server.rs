@@ -32,12 +32,18 @@ use crate::manifest::{ManifestKind, RawEntry};
 use crate::parsers;
 use crate::providers;
 use crate::version;
-use crate::vulnerabilities::{cache::VulnCache, Vulnerability};
+use crate::vulnerabilities::{
+    cache::{DetailCache, VulnCache},
+    Vulnerability,
+};
 
 /// How long a fetched version stays usable before we re-query the registry.
 /// A one-hour window balances freshness against politeness across all four
 /// registries.
 const CACHE_TTL: Duration = Duration::from_secs(3600);
+/// Vulnerabilities are essentially immutable once published, so we
+/// can cache severity scores much longer than version metadata.
+const DETAIL_TTL: Duration = Duration::from_secs(24 * 3600);
 
 /// Debounce window applied to `did_change`. Short enough that users see
 /// updates within a pause in typing, long enough that holding a key down
@@ -91,6 +97,7 @@ pub struct Backend {
     http: Client,
     cache: Arc<VersionCache>,
     vuln_cache: Arc<VulnCache>,
+    detail_cache: Arc<DetailCache>,
     /// Current parsed state of every open document. Keyed by URI.
     docs: Arc<DashMap<Url, Arc<DocState>>>,
     /// Last-pushed fingerprint per doc. Skips the refresh/diagnostics storm
@@ -117,6 +124,7 @@ impl Backend {
             http,
             cache: Arc::new(VersionCache::new(CACHE_TTL)),
             vuln_cache: Arc::new(VulnCache::new(CACHE_TTL)),
+            detail_cache: Arc::new(DetailCache::new(DETAIL_TTL)),
             docs: Arc::new(DashMap::new()),
             pushed: Arc::new(DashMap::new()),
             pending: Arc::new(DashMap::new()),
@@ -174,6 +182,7 @@ impl Backend {
         let http = self.http.clone();
         let cache = self.cache.clone();
         let vuln_cache = self.vuln_cache.clone();
+        let detail_cache = self.detail_cache.clone();
         let docs = self.docs.clone();
         let pushed = self.pushed.clone();
         let pending = self.pending.clone();
@@ -193,6 +202,7 @@ impl Backend {
                 &http,
                 &cache,
                 &vuln_cache,
+                &detail_cache,
                 &docs,
                 &pushed,
                 &uri_key,
@@ -212,6 +222,7 @@ async fn resolve_and_push(
     http: &Client,
     cache: &Arc<VersionCache>,
     vuln_cache: &Arc<VulnCache>,
+    detail_cache: &Arc<DetailCache>,
     docs: &DashMap<Url, Arc<DocState>>,
     pushed: &DashMap<Url, u64>,
     uri: &Url,
