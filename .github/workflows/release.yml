@@ -1,0 +1,119 @@
+# Release workflow — builds prebuilt uptick-lsp binaries for each platform and
+# attaches them to a GitHub release on every v* tag push.
+#
+# Asset naming convention (must stay stable — extension downloader constructs
+# these URLs deterministically):
+#   uptick-lsp-<version>-<target>.tar.gz   (Unix)
+#   uptick-lsp-<version>-<target>.zip      (Windows)
+# with a companion .sha256 file for each archive.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Cancel any in-progress run for the same ref (e.g. on re-push of a tag).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Shared cache keyed on Cargo.lock + toolchain + target; avoids
+      # rebuilding dependencies on every tag push.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build -p uptick-lsp --release --target ${{ matrix.target }}
+
+      # Strip leading 'v' so version in filenames is e.g. "0.3.0" not "v0.3.0".
+      - name: Set VERSION (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Set VERSION (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = "$env:GITHUB_REF_NAME" -replace '^v', ''
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ARCHIVE="uptick-lsp-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" uptick-lsp
+          shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "uptick-lsp-$env:VERSION-${{ matrix.target }}.zip"
+          # Compress-Archive stores files by leaf name (no directory prefix), so
+          # the extracted archive contains exactly `uptick-lsp.exe` at the root —
+          # which is what the extension downloader expects.
+          Compress-Archive -Path "target/${{ matrix.target }}/release/uptick-lsp.exe" -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "${archive}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          # Glob picks up whichever archive extension was produced (.tar.gz or .zip)
+          # plus its .sha256 companion; only one archive type exists per runner.
+          path: uptick-lsp-*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          # Tags containing '-' (e.g. v0.4.0-rc1) are pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
