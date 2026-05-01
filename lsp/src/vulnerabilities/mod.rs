@@ -9,6 +9,8 @@
 pub mod cache;
 pub mod osv;
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use reqwest::Client;
 use semver::Version;
@@ -67,6 +69,39 @@ pub async fn fetch_vulns(
     let _permit = OSV_SEM.acquire().await.expect("OSV semaphore");
     let ecosystem = osv_ecosystem(kind);
     osv::query(client, ecosystem, name, &version.to_string()).await
+}
+
+/// Fan out per-ID detail fetches in parallel, sharing the OSV semaphore
+/// with the query path. Returns one entry per ID; entries with failures
+/// or no parseable severity are returned as `(id, None)`.
+///
+/// Caller is responsible for stashing the result in `DetailCache`.
+pub async fn fetch_vuln_details(client: &Client, ids: &[String]) -> HashMap<String, Option<f32>> {
+    use futures::stream::StreamExt;
+    let mut futs = futures::stream::FuturesUnordered::new();
+    for id in ids {
+        let id = id.clone();
+        let client = client.clone();
+        futs.push(async move {
+            let _permit = OSV_SEM.acquire().await.expect("OSV semaphore");
+            let res = osv::query_detail(&client, &id).await;
+            (id, res)
+        });
+    }
+    let mut out = HashMap::with_capacity(ids.len());
+    while let Some((id, res)) = futs.next().await {
+        match res {
+            Ok(score) => {
+                out.insert(id, score);
+            }
+            Err(e) => {
+                tracing::warn!(%id, "OSV detail fetch failed: {e:#}");
+                // On error, do NOT insert — caller treats missing as
+                // "retry next time" (consistent with VulnCache behaviour).
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
