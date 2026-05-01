@@ -103,6 +103,7 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 
 | Release | Highlight |
 |---|---|
+| [**v0.4.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.4.0) | Hover augmentation for vulnerabilities — severity badge, GHSA/CVE id, summary, CVSS vector, and an osv.dev link, rendered inline next to the registry link. |
 | [**v0.3.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.3.0) | CVSS-aligned severity. Critical/High → `Error`, Medium → `Warning`, Low → `Information`. |
 | [**v0.2.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.2.0) | Vulnerability scanning. Known-vulnerable pins surface as warnings with GHSA/CVE codes. |
 | [**v0.1.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.1.0) | Inline version hints, hover tooltips, "Bump to X.Y.Z" code actions. |
@@ -114,7 +115,6 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 **Coming next**
 
 - Maven (`pom.xml`), .NET (`*.csproj`, `Directory.Packages.props`), Go (`go.mod`), Python (`pyproject.toml`).
-- Hover popups that include the CVSS score and advisory summary alongside the registry link.
 - Lockfile-aware vulnerability scanning (read `package-lock.json`, `Cargo.lock`).
 
 **Someday**
