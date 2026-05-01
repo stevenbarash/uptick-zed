@@ -28,11 +28,10 @@ function Note($msg) { Write-Host "==> $msg" }
 function Fail($msg) { Write-Error "install.ps1: $msg"; exit 1 }
 
 # --- Detect target ---------------------------------------------------------
-$arch = (Get-CimInstance Win32_Processor).Architecture
-# 9 = x64, 12 = ARM64. We only ship x64 today.
+$arch = $env:PROCESSOR_ARCHITECTURE
 switch ($arch) {
-    9       { $target = 'x86_64-pc-windows-msvc' }
-    default { Fail "Unsupported Windows architecture (Win32_Processor.Architecture=$arch). Only x64 prebuilts are published today." }
+    'AMD64' { $target = 'x86_64-pc-windows-msvc' }
+    default { Fail "Unsupported Windows architecture ($arch). Only x64 prebuilts are published today." }
 }
 Note "Detected target: $target"
 

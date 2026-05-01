@@ -29,7 +29,27 @@ CLONE=0
 VERIFY=1
 
 usage() {
-  sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+Uptick installer for macOS and Linux.
+
+Downloads the latest released uptick-lsp binary from GitHub, verifies its
+.sha256 sidecar, installs it under $PREFIX/bin (default ~/.local/bin), and
+warns if that directory is not on PATH. Optionally clones the repo so you
+can install the Zed dev extension that launches the binary.
+
+Usage:
+  curl -fsSL https://raw.githubusercontent.com/stevenbarash/uptick-zed/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/stevenbarash/uptick-zed/main/install.sh | bash -s -- --clone
+
+Flags:
+  --prefix DIR   Install directory base. Binary lands in <DIR>/bin.
+                 Default: $HOME/.local
+  --version VER  Tag without leading v (e.g. 0.4.0). Default: latest non-prerelease.
+  --clone        Also clone the repo to ~/.local/share/uptick-zed for the
+                 Zed extension. Skipped if the directory already exists.
+  --no-verify    Skip sha256 verification. Discouraged.
+  --help         Show this help and exit.
+EOF
   exit "${1:-0}"
 }
 
