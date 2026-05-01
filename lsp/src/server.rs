@@ -180,9 +180,11 @@ impl Backend {
         // it's all pointer bumps. We do this here (rather than moving `self`
         // in) because the task outlives the handler.
         let http = self.http.clone();
-        let cache = self.cache.clone();
-        let vuln_cache = self.vuln_cache.clone();
-        let detail_cache = self.detail_cache.clone();
+        let caches = Caches {
+            version: self.cache.clone(),
+            vuln: self.vuln_cache.clone(),
+            detail: self.detail_cache.clone(),
+        };
         let docs = self.docs.clone();
         let pushed = self.pushed.clone();
         let pending = self.pending.clone();
@@ -197,20 +199,19 @@ impl Backend {
             // so a concurrent `schedule_resolve` doesn't see a stale handle
             // and try to abort something that's already finished its sleep.
             pending.remove(&uri_key);
-            resolve_and_push(
-                &client,
-                &http,
-                &cache,
-                &vuln_cache,
-                &detail_cache,
-                &docs,
-                &pushed,
-                &uri_key,
-            )
-            .await;
+            resolve_and_push(&client, &http, &caches, &docs, &pushed, &uri_key).await;
         });
         self.pending.insert(uri, handle);
     }
+}
+
+/// Bundle of caches passed into the resolve task. Grouping them here
+/// keeps `resolve_and_push`'s arity sane and lets `schedule_resolve`
+/// clone each `Arc` once.
+struct Caches {
+    version: Arc<VersionCache>,
+    vuln: Arc<VulnCache>,
+    detail: Arc<DetailCache>,
 }
 
 /// Do the actual network work for one URI and push updated diagnostics.
@@ -220,13 +221,15 @@ impl Backend {
 async fn resolve_and_push(
     client: &LspClient,
     http: &Client,
-    cache: &Arc<VersionCache>,
-    vuln_cache: &Arc<VulnCache>,
-    detail_cache: &Arc<DetailCache>,
+    caches: &Caches,
     docs: &DashMap<Url, Arc<DocState>>,
     pushed: &DashMap<Url, u64>,
     uri: &Url,
 ) {
+    let cache = &caches.version;
+    let vuln_cache = &caches.vuln;
+    let detail_cache = &caches.detail;
+
     // Grab an immutable snapshot of the current parsed state. If the doc
     // was closed while we were waiting out the debounce, there's nothing
     // to do.
