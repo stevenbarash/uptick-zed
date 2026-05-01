@@ -37,9 +37,9 @@ A `✓` means the latest release satisfies your range; a `→` means a newer ver
 
 Hover over any dependency name or version for a summary with a link to the registry page.
 
-### Vulnerability scanning (v0.2)
+### Vulnerability scanning
 
-Every parseable `(ecosystem, name, version)` is queried against [osv.dev](https://osv.dev). Known-vulnerable pins surface as `Warning`-level diagnostics in the Problems panel, with the GHSA/CVE ID as the diagnostic code:
+Every parseable `(ecosystem, name, version)` is queried against [osv.dev](https://osv.dev). Known-vulnerable pins surface as LSP diagnostics in the Problems panel, with the GHSA/CVE ID as the diagnostic code:
 
 ```jsonc
 {
@@ -51,9 +51,28 @@ Every parseable `(ecosystem, name, version)` is queried against [osv.dev](https:
 
 A lenient version parser handles npm-style shorthand (`^1.2`, `~1`, `1.x`, `>=1.0 <2.0`, hyphen/OR ranges) where upstream tools silently skip them.
 
+**Severity (v0.3+):** each advisory's CVSS base score is fetched separately and bucketed:
+
+| CVSS base score | Bucket | LSP severity |
+|---|---|---|
+| 9.0 – 10.0 | Critical | `Error` |
+| 7.0 – 8.9 | High | `Error` |
+| 4.0 – 6.9 | Medium | `Warning` |
+| 0.1 – 3.9 | Low | `Information` |
+| (no score) | — | `Warning` |
+
+So `lodash@4.17.15` produces 3 `Error`-severity diagnostics (Critical/High GHSAs) and 3 `Warning`-severity ones (Medium GHSAs). Critical/High vulns appear red in the editor; Medium yellow; Low blue.
+
 ## Roadmap
 
-Latest release is **v0.2** — adds OSV vulnerability scanning on top of v0.1's four-ecosystem version-suggestion baseline. The items below are rough plans, not a schedule; contributions are welcome.
+Latest release is **v0.3** — adds CVSS-aligned severity to OSV diagnostics on top of v0.2's vulnerability scanner and v0.1's four-ecosystem version-suggestion baseline. The items below are rough plans, not a schedule; contributions are welcome.
+
+### v0.3 — shipped
+
+- **CVSS-aligned diagnostic severity.** Each advisory's CVSS base score is fetched via OSV's `/v1/vulns/{id}` endpoint and mapped to an LSP severity bucket (Critical/High → `Error`, Medium → `Warning`, Low → `Information`, no score → `Warning`).
+- **Phase 2.5 detail fan-out.** After the existing `/v1/query` returns vulnerability IDs, uptick fans out per-ID detail requests in parallel (capped by the same OSV semaphore).
+- **`DetailCache` (24h TTL).** Per-advisory severity scores cached by ID. Advisories are essentially immutable once published, so each unique GHSA/CVE is fetched at most once per session even when surfaced across many packages.
+- **`cvss = "2"` dependency** (rustsec/rustsec org). Parses CVSS_V3 vectors; falls back to GHSA `database_specific.severity` text bucket for records without a parseable vector.
 
 ### v0.2 — shipped
 
@@ -83,7 +102,7 @@ Latest release is **v0.2** — adds OSV vulnerability scanning on top of v0.1's 
 - 250 ms debounce on `did_change`; in-flight tasks aborted on close or re-trigger.
 - Fingerprint-based refresh skip — no diagnostic storms on keystrokes that don't change state.
 
-### v0.3 — next up
+### v0.4 — next up
 
 **More ecosystems**, widest ROI first:
 
@@ -98,13 +117,13 @@ Latest release is **v0.2** — adds OSV vulnerability scanning on top of v0.1's 
 - Prebuilt `uptick-lsp` binaries attached to GitHub releases, auto-downloaded by the WASM extension on first run (the `zed-dependi` pattern). Removes the manual `cargo install` step.
 - Publish to Zed's extension registry once stable.
 
-**Vulnerability UX (next iteration of v0.2)**
+**Vulnerability UX (next iteration after v0.3 severity)**
 
-- Hover augmentation: surface vuln IDs and summaries inside the existing hover popup alongside the registry link.
-- CVSS severity (requires a second OSV call per advisory or switching to the batch endpoint).
+- Hover augmentation: surface vuln IDs, CVSS scores, and summaries inside the existing hover popup alongside the registry link.
 - Lockfile-aware scanning — read `package-lock.json` / `Cargo.lock` so the *resolved* install version is scanned rather than the manifest literal.
+- CVSS_V4 vector support once the `cvss` crate or upstream OSV adoption broadens.
 
-### v0.4+ — nice to have
+### v0.5+ — nice to have
 
 - `--include-prereleases` config flag. Each provider already returns `latest_stable` and `latest_any`; we just always prefer stable today.
 - Persistent on-disk cache across LSP restarts (e.g. `~/.cache/uptick/`).
@@ -116,14 +135,14 @@ Latest release is **v0.2** — adds OSV vulnerability scanning on top of v0.1's 
 - Workspace-aware Cargo support — one root `Cargo.toml` covering all workspace members' deps without needing each opened individually.
 - Optional `uptick.toml` per-project config.
 
-### Known limitations in v0.2
+### Known limitations in v0.3
 
 - Pubspec entries with `git:` / `path:` / `hosted:` specs are skipped — no single upstream version to compare against.
 - Private registries return 401/403; no credential support yet.
 - Zed's extension API doesn't expose inline decorations directly ([zed#49438](https://github.com/zed-industries/zed/issues/49438)); we use LSP inlay hints, which render at the end of the line rather than above it as a clickable lens. The "bump" UX is `cmd-.` (code actions), not a click.
-- The LSP binary is installed manually via `cargo install --path lsp` until binary distribution lands in v0.3.
+- The LSP binary is installed manually via `cargo install --path lsp` until binary distribution lands in v0.4.
 - Vulnerability scans use the manifest literal, not the lockfile-resolved install version. Pinning `^1.0.0` of a package whose latest 1.x is vulnerable will not flag — we scan `1.0.0`.
-- OSV diagnostics carry no severity (osv.dev's `/v1/query` endpoint returns IDs and summaries only). All vulns surface as `Warning`.
+- CVSS_V4 vectors aren't parsed yet (cvss 2.x supports v3 only). OSV records carrying only V4 vectors fall through to the `database_specific.severity` text bucket if present, otherwise no severity.
 
 ## How it's built
 
@@ -172,9 +191,10 @@ Set `UPTICK_LOG=debug` to see parse/fetch logs on stderr.
 ## Design notes
 
 - **Spans.** We rely on `toml_edit::Document` for TOML, `jsonc_parser`'s AST for JSON/JSONC, and a hand-rolled line scanner for pubspec YAML. All three produce byte ranges that we convert to LSP UTF-16 positions via a small `LineIndex`.
-- **Caching.** Two in-memory `DashMap` caches per server instance with a 1-hour TTL: `VersionCache` keyed on `(ecosystem, name)` for upstream version lookups, and `VulnCache` keyed on `(ecosystem, name, Version)` for OSV scan results. Empty `Vec<Vulnerability>` distinguishes "scanned and clean" from cache miss. Neither cache persists across restarts.
-- **Rate limiting.** The server uses a single `reqwest` client with a 10-second timeout and a descriptive `User-Agent` (crates.io requires this). Per-host semaphores cap concurrency: 16 for npm/pub.dev, 8 for Packagist and OSV, 1 for crates.io plus a min-interval gate.
+- **Caching.** Three in-memory `DashMap` caches per server instance: `VersionCache` (1-hour TTL, keyed on `(ecosystem, name)`) for upstream version lookups, `VulnCache` (1-hour TTL, keyed on `(ecosystem, name, Version)`) for OSV scan results, and `DetailCache` (24-hour TTL, keyed on advisory ID alone) for per-advisory CVSS scores. The longer DetailCache TTL reflects that advisories are essentially immutable once published. Empty `Vec<Vulnerability>` in VulnCache distinguishes "scanned and clean" from a miss; `Some(None)` in DetailCache distinguishes "fetched, no severity available" from a miss. None of the caches persist across restarts.
+- **Rate limiting.** The server uses a single `reqwest` client with a 10-second timeout and a descriptive `User-Agent` (crates.io requires this). Per-host semaphores cap concurrency: 16 for npm/pub.dev, 8 for Packagist and OSV, 1 for crates.io plus a min-interval gate. OSV's primary query and severity-detail fetches share the same 8-wide semaphore.
 - **Vulnerability parsing.** OSV's `/v1/query` needs concrete `x.y.z` versions but manifests pin ranges. `version::parse_for_scan` strips operators, narrows to the first alternative, replaces `x`/`*` wildcards with `0`, pads to three components, then parses. Bare wildcards / non-semver literals return `None` and skip the OSV call entirely.
+- **Severity.** Per-advisory CVSS scores come from `/v1/vulns/{id}` (Phase 2.5, runs after the primary scan). Vectors are parsed via the [`cvss`](https://crates.io/crates/cvss) crate (rustsec/rustsec org); a `database_specific.severity` text bucket is used as fallback for records without a parseable vector. `severity_for_score` maps the numeric base score to an LSP severity bucket — see the table above.
 - **Prereleases.** Each provider returns `latest_stable` and `latest_any`; today we always prefer stable. A `--include-prereleases` config flag is the natural next step.
 
 ## Acknowledgements
