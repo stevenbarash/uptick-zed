@@ -58,7 +58,26 @@ More ecosystems on the [roadmap](#roadmap).
 
 Uptick ships as two pieces: the LSP server (`uptick-lsp`) and a thin Zed extension that launches it.
 
-**1. Add the Zed extension**
+**Quickest path — one-liner installer**
+
+The installer detects your OS and architecture, downloads the matching binary from the latest release, verifies its `.sha256`, drops it under `~/.local/bin`, and warns if that's not on your `PATH`. Pass `--clone` to also clone this repo so you can install the Zed dev extension from it.
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/stevenbarash/uptick-zed/main/install.sh | bash
+
+# Same, plus clone the repo to ~/.local/share/uptick-zed
+curl -fsSL https://raw.githubusercontent.com/stevenbarash/uptick-zed/main/install.sh | bash -s -- --clone
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/stevenbarash/uptick-zed/main/install.ps1 | iex
+```
+
+After that, in Zed run `zed: install dev extension` and point it at the cloned repo (or `git clone` it manually).
+
+**Add the Zed extension by hand**
 
 ```sh
 git clone https://github.com/stevenbarash/uptick-zed
@@ -70,7 +89,7 @@ On first use, the extension downloads a prebuilt `uptick-lsp` binary from the la
 
 **Manual LSP binary install**
 
-If you want to use a release-candidate binary, run the LSP outside Zed, or skip the extension downloader, download the archive for your platform from [Releases](https://github.com/stevenbarash/uptick-zed/releases):
+If you want to use a release-candidate binary, run the LSP outside Zed, or skip both the installer and the extension downloader, download the archive for your platform from [Releases](https://github.com/stevenbarash/uptick-zed/releases):
 
 | Platform | Asset |
 |---|---|
