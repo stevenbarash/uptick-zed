@@ -298,11 +298,7 @@ async fn resolve_and_push(
         }
     }
 
-    // --- Phase 2.5: per-ID severity detail fetches ---
-    //
-    // Collect every unique vuln ID we've now cached for any (kind, name,
-    // version) currently visible. For IDs whose severity we've never
-    // fetched, fan out /v1/vulns/{id} requests in parallel.
+    // Fetch severity scores for any cached advisory IDs not yet in DetailCache.
     let mut detail_ids: HashSet<String> = HashSet::new();
     for a in &state.entries {
         if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
@@ -342,8 +338,6 @@ async fn resolve_and_push(
                     // scan-completion order.
                     vulns.sort_by(|x, y| x.id.cmp(&y.id));
                     for v in &mut vulns {
-                        // Outer Some = cached at all; inner Option<f32> = the score itself.
-                        // Unfetched IDs leave score as None (renders as Warning).
                         if let Some(score) = detail_cache.get(&v.id) {
                             v.score = score;
                         }
@@ -438,15 +432,8 @@ async fn push_updates_raw(
     let _ = client.code_lens_refresh().await;
 }
 
-/// Map a CVSS-aligned score to an LSP diagnostic severity.
-///
-/// Buckets:
-///   9.0+     → Error    (Critical)
-///   7.0–8.9  → Error    (High)
-///   4.0–6.9  → Warning  (Medium)
-///   0.1–3.9  → Information (Low)
-///   None     → Warning  (default; preserves v0.2 behaviour for
-///                        advisories with no parseable severity)
+/// Map a CVSS base score to an LSP diagnostic severity. `None` defaults
+/// to `Warning` so advisories without parseable severity stay visible.
 fn severity_for_score(score: Option<f32>) -> DiagnosticSeverity {
     match score {
         Some(s) if s >= 7.0 => DiagnosticSeverity::ERROR,

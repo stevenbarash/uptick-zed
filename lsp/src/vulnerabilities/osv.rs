@@ -54,8 +54,19 @@ struct OsvDetailResponse {
 #[derive(Deserialize, Debug)]
 struct OsvSeverityEntry {
     #[serde(rename = "type")]
-    type_: String,
+    type_: SeverityType,
     score: String,
+}
+
+/// OSV `severity[].type` discriminant. We only parse CVSS_V3 (cvss 2.x
+/// crate covers v3 and v4 vectors but the OSV-published v4 entries are
+/// rare; v2 entries fall through to text-bucket fallback).
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum SeverityType {
+    CvssV3,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Deserialize, Debug)]
@@ -65,7 +76,6 @@ struct OsvDetailDbSpecific {
 }
 
 /// Map GHSA-style severity text to a CVSS-aligned numeric midpoint.
-/// Used as a fallback when the CVSS vector itself cannot be parsed.
 fn text_bucket_score(label: &str) -> Option<f32> {
     match label.to_ascii_uppercase().as_str() {
         "CRITICAL" => Some(9.5),
@@ -76,46 +86,28 @@ fn text_bucket_score(label: &str) -> Option<f32> {
     }
 }
 
-/// Extract a CVSS base score from a single OSV severity entry. Returns
-/// `None` for vector strings the `cvss` crate cannot parse.
-///
-/// Note: cvss 2.2.0 supports CVSS v3 and v4 only (no v2 module).
-/// CVSS_V2 entries return `None`; fall back to text bucket instead.
 fn cvss_entry_score(entry: &OsvSeverityEntry) -> Option<f32> {
-    use cvss::v3::Base as V3;
-    match entry.type_.as_str() {
-        "CVSS_V3" => V3::from_str(&entry.score)
+    match entry.type_ {
+        SeverityType::CvssV3 => cvss::v3::Base::from_str(&entry.score)
             .ok()
             .map(|b| b.score().value() as f32),
-        // cvss 2.2.0 has no v2 module; fall through to text-bucket fallback.
-        _ => None,
+        SeverityType::Other => None,
     }
 }
 
-/// Pick the best severity score from an OSV detail response.
-/// Preference order: any parseable CVSS v3 vector, then text bucket fallback,
-/// then `None`.
 fn extract_score(detail: &OsvDetailResponse) -> Option<f32> {
-    // Prefer CVSS_V3 over anything else.
-    let v3 = detail
+    detail
         .severity
         .iter()
-        .find(|e| e.type_ == "CVSS_V3")
-        .and_then(cvss_entry_score);
-    if let Some(s) = v3 {
-        return Some(s);
-    }
-    // Try any other parseable entry (e.g. CVSS_V2 returns None from cvss_entry_score).
-    let any = detail.severity.iter().find_map(cvss_entry_score);
-    if let Some(s) = any {
-        return Some(s);
-    }
-    // Fall back to text bucket.
-    detail
-        .database_specific
-        .as_ref()
-        .and_then(|d| d.severity.as_deref())
-        .and_then(text_bucket_score)
+        .find(|e| e.type_ == SeverityType::CvssV3)
+        .and_then(cvss_entry_score)
+        .or_else(|| {
+            detail
+                .database_specific
+                .as_ref()
+                .and_then(|d| d.severity.as_deref())
+                .and_then(text_bucket_score)
+        })
 }
 
 /// Test-friendly wrapper: parse a JSON detail response and extract a score.
