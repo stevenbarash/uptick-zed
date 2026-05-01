@@ -34,6 +34,12 @@ jobs:
         run: cargo clippy -p uptick-lsp --all-targets -- -D warnings
       - name: test
         run: cargo test -p uptick-lsp --lib
+      # Catch broken doc links / bare URLs / other rustdoc lints before they
+      # land. Cheap: only documents this workspace (--no-deps).
+      - name: doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
 
   extension:
     name: Extension (wasm clippy + build)

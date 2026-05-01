@@ -40,7 +40,7 @@ pub struct Vulnerability {
 /// Map a `ManifestKind` to its OSV ecosystem identifier.
 ///
 /// Values come from OSV's published ecosystem list
-/// (https://ossf.github.io/osv-schema/#affectedpackage-field) and match
+/// (<https://ossf.github.io/osv-schema/#affectedpackage-field>) and match
 /// vscode-versionlens's upstream mapping verbatim.
 pub fn osv_ecosystem(kind: ManifestKind) -> &'static str {
     match kind {

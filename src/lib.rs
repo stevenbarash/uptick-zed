@@ -1,7 +1,7 @@
 //! Root crate: the WASM component loaded by Zed itself.
 //!
 //! This crate is intentionally tiny. Zed's extension API doesn't expose
-//! inline decorations (see https://github.com/zed-industries/zed/issues/49438),
+//! inline decorations (see <https://github.com/zed-industries/zed/issues/49438>),
 //! so the real work — parsing manifests, fetching registry metadata, publishing
 //! hints/diagnostics/hovers/code-actions — happens in the separate
 //! `uptick-lsp` binary. All this module does is tell Zed how to launch that
