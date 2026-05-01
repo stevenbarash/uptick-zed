@@ -96,40 +96,36 @@ fn cvss_entry_score(entry: &OsvSeverityEntry) -> Option<f32> {
 }
 
 fn extract_detail(detail: &OsvDetailResponse) -> VulnDetail {
-    if let Some(entry) = detail
+    let cvss = detail
         .severity
         .iter()
         .find(|e| e.type_ == SeverityType::CvssV3)
-    {
-        if let Some(score) = cvss_entry_score(entry) {
-            return VulnDetail {
-                score: Some(score),
-                vector: Some(entry.score.clone()),
-            };
-        }
+        .and_then(|e| cvss_entry_score(e).map(|score| (score, e.score.clone())));
+    if let Some((score, vector)) = cvss {
+        return VulnDetail {
+            score: Some(score),
+            vector: Some(vector),
+        };
     }
-    let bucket_score = detail
-        .database_specific
-        .as_ref()
-        .and_then(|d| d.severity.as_deref())
-        .and_then(text_bucket_score);
     VulnDetail {
-        score: bucket_score,
+        score: detail
+            .database_specific
+            .as_ref()
+            .and_then(|d| d.severity.as_deref())
+            .and_then(text_bucket_score),
         vector: None,
     }
-}
-
-/// Test-friendly wrapper: parse a JSON detail response and extract a score.
-#[cfg(test)]
-fn parse_detail_score(json: &str) -> Option<f32> {
-    let detail: OsvDetailResponse = serde_json::from_str(json).ok()?;
-    extract_detail(&detail).score
 }
 
 #[cfg(test)]
 fn parse_detail(json: &str) -> Option<VulnDetail> {
     let detail: OsvDetailResponse = serde_json::from_str(json).ok()?;
     Some(extract_detail(&detail))
+}
+
+#[cfg(test)]
+fn parse_detail_score(json: &str) -> Option<f32> {
+    parse_detail(json).and_then(|d| d.score)
 }
 
 /// Fetch full detail for one OSV ID and extract its CVSS base score and

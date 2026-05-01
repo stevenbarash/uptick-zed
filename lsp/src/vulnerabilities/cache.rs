@@ -72,12 +72,9 @@ impl VulnCache {
 }
 
 /// Per-ID TTL cache of OSV severity details (score + CVSS vector). Keyed
-/// by bare advisory ID (e.g. `"GHSA-jf85-cpcp-j695"`). A `Some(VulnDetail)`
-/// with all-`None` inner fields distinguishes "fetched, no severity
-/// available" from a cache miss (`None`).
-///
-/// Advisories are essentially immutable once published, so the TTL can
-/// be longer than the version-info TTL (24 hours by default).
+/// by bare advisory ID (e.g. `"GHSA-jf85-cpcp-j695"`). Advisories are
+/// essentially immutable once published, so the TTL can be longer than
+/// the version-info TTL (24 hours by default).
 pub struct DetailCache {
     entries: DashMap<String, DetailEntry>,
     ttl: Duration,

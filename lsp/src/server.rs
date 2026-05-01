@@ -269,16 +269,25 @@ async fn resolve_and_push(
     // overwrite a cache hit with a failed scan — an error is logged and
     // treated as "retry next keystroke".
     //
+    // Parse each literal once; the parsed pairs (entry index → version) are
+    // reused for the scan-target sweep, the detail-id sweep, and stay in
+    // scope until the alter() fold below where literals may have shifted.
+    let parsed: Vec<Option<Version>> = state
+        .entries
+        .iter()
+        .map(|a| crate::version::parse_for_scan(&a.entry.version_literal))
+        .collect();
+
     // Size hints: every entry is a potential scan target at most, so
     // over-allocating once avoids growth reallocations during collection.
     let mut scan_targets: Vec<(String, Version)> = Vec::with_capacity(state.entries.len());
     let mut seen: HashSet<(String, Version)> = HashSet::with_capacity(state.entries.len());
-    for a in &state.entries {
-        if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
+    for (a, ver) in state.entries.iter().zip(&parsed) {
+        if let Some(ver) = ver {
             if seen.insert((a.entry.name.clone(), ver.clone()))
-                && vuln_cache.get(kind, &a.entry.name, &ver).is_none()
+                && vuln_cache.get(kind, &a.entry.name, ver).is_none()
             {
-                scan_targets.push((a.entry.name.clone(), ver));
+                scan_targets.push((a.entry.name.clone(), ver.clone()));
             }
         }
     }
@@ -303,9 +312,9 @@ async fn resolve_and_push(
 
     // Fetch severity scores for any cached advisory IDs not yet in DetailCache.
     let mut detail_ids: HashSet<String> = HashSet::new();
-    for a in &state.entries {
-        if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
-            if let Some(vulns) = vuln_cache.get(kind, &a.entry.name, &ver) {
+    for (a, ver) in state.entries.iter().zip(&parsed) {
+        if let Some(ver) = ver {
+            if let Some(vulns) = vuln_cache.get(kind, &a.entry.name, ver) {
                 for v in vulns {
                     if detail_cache.get(&v.id).is_none() {
                         detail_ids.insert(v.id);
@@ -436,28 +445,56 @@ async fn push_updates_raw(
     let _ = client.code_lens_refresh().await;
 }
 
-/// Human-readable severity bucket for a CVSS base score. Used in hover
-/// markdown to show a label next to the advisory id. `None` becomes
-/// `"UNKNOWN"`.
-fn severity_label(score: Option<f32>) -> &'static str {
-    match score {
-        Some(s) if s >= 9.0 => "CRITICAL",
-        Some(s) if s >= 7.0 => "HIGH",
-        Some(s) if s >= 4.0 => "MEDIUM",
-        Some(s) if s > 0.0 => "LOW",
-        _ => "UNKNOWN",
+/// Single source of truth for CVSS bucket thresholds. Keeps the hover
+/// label (`CRITICAL` / `HIGH` / …) and the LSP diagnostic severity
+/// (`ERROR` / `WARNING` / …) from drifting apart.
+#[derive(Clone, Copy)]
+enum Severity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Unknown,
+}
+
+impl Severity {
+    fn from_score(score: Option<f32>) -> Self {
+        match score {
+            Some(s) if s >= 9.0 => Self::Critical,
+            Some(s) if s >= 7.0 => Self::High,
+            Some(s) if s >= 4.0 => Self::Medium,
+            Some(s) if s > 0.0 => Self::Low,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Critical => "CRITICAL",
+            Self::High => "HIGH",
+            Self::Medium => "MEDIUM",
+            Self::Low => "LOW",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+
+    /// `Unknown` falls through to `Warning` so advisories without a
+    /// parseable score stay visible rather than disappearing as `Hint`.
+    fn diagnostic(self) -> DiagnosticSeverity {
+        match self {
+            Self::Critical | Self::High => DiagnosticSeverity::ERROR,
+            Self::Medium => DiagnosticSeverity::WARNING,
+            Self::Low => DiagnosticSeverity::INFORMATION,
+            Self::Unknown => DiagnosticSeverity::WARNING,
+        }
     }
 }
 
-/// Map a CVSS base score to an LSP diagnostic severity. `None` defaults
-/// to `Warning` so advisories without parseable severity stay visible.
-fn severity_for_score(score: Option<f32>) -> DiagnosticSeverity {
-    match score {
-        Some(s) if s >= 7.0 => DiagnosticSeverity::ERROR,
-        Some(s) if s >= 4.0 => DiagnosticSeverity::WARNING,
-        Some(s) if s > 0.0 => DiagnosticSeverity::INFORMATION,
-        _ => DiagnosticSeverity::WARNING,
-    }
+/// Replace literal backticks so a value can be safely embedded inside a
+/// markdown code span. Used four times in `hover()` for name, literal,
+/// summary, and CVSS vector.
+fn escape_backticks(s: &str) -> String {
+    s.replace('`', "'")
 }
 
 /// Produce diagnostics for every entry: `Information`-level for update
@@ -494,7 +531,7 @@ fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
             let id = &v.id;
             out.push(Diagnostic {
                 range: a.entry.version_range,
-                severity: Some(severity_for_score(v.score)),
+                severity: Some(Severity::from_score(v.score).diagnostic()),
                 source: Some(DIAGNOSTIC_SOURCE.into()),
                 code: Some(NumberOrString::String(v.id.clone())),
                 message: format!("{id}: {message}"),
@@ -652,21 +689,17 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        // Render the name inside a code span so backticks, brackets, or
-        // parens in an exotic package name can't be interpreted as markdown
-        // link/formatting syntax. `write!` into `String` is infallible.
+        // Backticks in user-supplied strings would break the surrounding
+        // markdown code spans, so all such values go through `escape_backticks`.
         let mut md = String::new();
-        // Replace raw backticks in the name with apostrophes so our
-        // surrounding code span stays unambiguous.
-        let name = hit.entry.name.replace('`', "'");
+        let name = escape_backticks(&hit.entry.name);
         write!(md, "`{name}`").unwrap();
         if let Some(group) = hit.entry.group {
             write!(md, " _({group})_").unwrap();
         }
         md.push('\n');
 
-        // Current literal block. Again: escape backticks to keep markdown sane.
-        let literal = hit.entry.version_literal.replace('`', "'");
+        let literal = escape_backticks(&hit.entry.version_literal);
         write!(md, "\ncurrent: `{literal}`\n").unwrap();
         if let Some(latest) = &hit.latest {
             writeln!(md, "latest: `{latest}`").unwrap();
@@ -684,26 +717,20 @@ impl LanguageServer for Backend {
             write!(md, "\n[registry]({url})").unwrap();
         }
 
-        // Vulnerability section: one block per advisory affecting the
-        // parsed literal. Severity badge + id, summary, CVSS vector, and
-        // a link to the osv.dev page. Anything missing is silently
-        // skipped — the badge and id are the only fields guaranteed.
         if !hit.vulns.is_empty() {
             md.push_str("\n\n---\n");
             for v in &hit.vulns {
-                let label = severity_label(v.score);
+                let label = Severity::from_score(v.score).label();
                 write!(md, "\n**{label}** `{id}`", id = v.id).unwrap();
                 if let Some(score) = v.score {
                     write!(md, " · score {score:.1}").unwrap();
                 }
                 md.push('\n');
                 if let Some(summary) = v.summary.as_deref().filter(|s| !s.is_empty()) {
-                    let summary = summary.replace('`', "'");
-                    writeln!(md, "\n{summary}").unwrap();
+                    writeln!(md, "\n{}", escape_backticks(summary)).unwrap();
                 }
                 if let Some(vector) = v.vector.as_deref() {
-                    let vector = vector.replace('`', "'");
-                    writeln!(md, "\nCVSS: `{vector}`").unwrap();
+                    writeln!(md, "\nCVSS: `{}`", escape_backticks(vector)).unwrap();
                 }
                 writeln!(
                     md,
