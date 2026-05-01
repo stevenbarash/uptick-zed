@@ -392,6 +392,16 @@ fn fingerprint(state: &DocState) -> u64 {
         a.vulns.len().hash(&mut h);
         for v in &a.vulns {
             v.id.hash(&mut h);
+            // Hash a discriminant + bit pattern so a late-arriving
+            // severity score invalidates the fingerprint and the
+            // re-rendered diagnostic reaches the editor.
+            match v.score {
+                None => 0u8.hash(&mut h),
+                Some(s) => {
+                    1u8.hash(&mut h);
+                    s.to_bits().hash(&mut h);
+                }
+            }
         }
     }
     h.finish()
@@ -428,6 +438,24 @@ async fn push_updates_raw(
     let _ = client.code_lens_refresh().await;
 }
 
+/// Map a CVSS-aligned score to an LSP diagnostic severity.
+///
+/// Buckets:
+///   9.0+     → Error    (Critical)
+///   7.0–8.9  → Error    (High)
+///   4.0–6.9  → Warning  (Medium)
+///   0.1–3.9  → Information (Low)
+///   None     → Warning  (default; preserves v0.2 behaviour for
+///                        advisories with no parseable severity)
+fn severity_for_score(score: Option<f32>) -> DiagnosticSeverity {
+    match score {
+        Some(s) if s >= 7.0 => DiagnosticSeverity::ERROR,
+        Some(s) if s >= 4.0 => DiagnosticSeverity::WARNING,
+        Some(s) if s > 0.0 => DiagnosticSeverity::INFORMATION,
+        _ => DiagnosticSeverity::WARNING,
+    }
+}
+
 /// Produce diagnostics for every entry: `Information`-level for update
 /// availability, and `Warning`-level for known vulnerabilities.
 fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
@@ -462,7 +490,7 @@ fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
             let id = &v.id;
             out.push(Diagnostic {
                 range: a.entry.version_range,
-                severity: Some(DiagnosticSeverity::WARNING),
+                severity: Some(severity_for_score(v.score)),
                 source: Some(DIAGNOSTIC_SOURCE.into()),
                 code: Some(NumberOrString::String(v.id.clone())),
                 message: format!("{id}: {message}"),
