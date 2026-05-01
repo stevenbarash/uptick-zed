@@ -35,6 +35,18 @@ pub struct Vulnerability {
     /// CVSS base score 0.0–10.0 if any `severity[]` entry parsed, else
     /// `None`. `None` is rendered as `Warning` (the v0.2 default).
     pub score: Option<f32>,
+    /// CVSS vector string from the matched `severity[]` entry (e.g.
+    /// `"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"`). `None` when the
+    /// score came from the text-bucket fallback or no severity is set.
+    pub vector: Option<String>,
+}
+
+/// Detail-fetch result: severity score plus its CVSS vector when present.
+/// Returned from `osv::query_detail` and stashed in `DetailCache`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VulnDetail {
+    pub score: Option<f32>,
+    pub vector: Option<String>,
 }
 
 /// Map a `ManifestKind` to its OSV ecosystem identifier.
@@ -73,10 +85,10 @@ pub async fn fetch_vulns(
 
 /// Fan out per-ID detail fetches in parallel, sharing the OSV semaphore
 /// with the query path. Returns one entry per ID; entries with failures
-/// or no parseable severity are returned as `(id, None)`.
+/// are simply omitted (caller treats missing as "retry next time").
 ///
 /// Caller is responsible for stashing the result in `DetailCache`.
-pub async fn fetch_vuln_details(client: &Client, ids: &[String]) -> HashMap<String, Option<f32>> {
+pub async fn fetch_vuln_details(client: &Client, ids: &[String]) -> HashMap<String, VulnDetail> {
     use futures::stream::StreamExt;
     let mut futs = futures::stream::FuturesUnordered::new();
     for id in ids {
@@ -91,8 +103,8 @@ pub async fn fetch_vuln_details(client: &Client, ids: &[String]) -> HashMap<Stri
     let mut out = HashMap::with_capacity(ids.len());
     while let Some((id, res)) = futs.next().await {
         match res {
-            Ok(score) => {
-                out.insert(id, score);
+            Ok(detail) => {
+                out.insert(id, detail);
             }
             Err(e) => {
                 tracing::warn!(%id, "OSV detail fetch failed: {e:#}");

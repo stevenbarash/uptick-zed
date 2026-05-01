@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use super::Vulnerability;
+use super::{VulnDetail, Vulnerability};
 
 const OSV_QUERY_URL: &str = "https://api.osv.dev/v1/query";
 const OSV_VULN_URL_PREFIX: &str = "https://api.osv.dev/v1/vulns/";
@@ -95,31 +95,47 @@ fn cvss_entry_score(entry: &OsvSeverityEntry) -> Option<f32> {
     }
 }
 
-fn extract_score(detail: &OsvDetailResponse) -> Option<f32> {
-    detail
+fn extract_detail(detail: &OsvDetailResponse) -> VulnDetail {
+    if let Some(entry) = detail
         .severity
         .iter()
         .find(|e| e.type_ == SeverityType::CvssV3)
-        .and_then(cvss_entry_score)
-        .or_else(|| {
-            detail
-                .database_specific
-                .as_ref()
-                .and_then(|d| d.severity.as_deref())
-                .and_then(text_bucket_score)
-        })
+    {
+        if let Some(score) = cvss_entry_score(entry) {
+            return VulnDetail {
+                score: Some(score),
+                vector: Some(entry.score.clone()),
+            };
+        }
+    }
+    let bucket_score = detail
+        .database_specific
+        .as_ref()
+        .and_then(|d| d.severity.as_deref())
+        .and_then(text_bucket_score);
+    VulnDetail {
+        score: bucket_score,
+        vector: None,
+    }
 }
 
 /// Test-friendly wrapper: parse a JSON detail response and extract a score.
 #[cfg(test)]
 fn parse_detail_score(json: &str) -> Option<f32> {
     let detail: OsvDetailResponse = serde_json::from_str(json).ok()?;
-    extract_score(&detail)
+    extract_detail(&detail).score
 }
 
-/// Fetch full detail for one OSV ID and extract its CVSS base score.
-/// Returns `Ok(None)` if the advisory has no parseable severity.
-pub async fn query_detail(client: &Client, id: &str) -> Result<Option<f32>> {
+#[cfg(test)]
+fn parse_detail(json: &str) -> Option<VulnDetail> {
+    let detail: OsvDetailResponse = serde_json::from_str(json).ok()?;
+    Some(extract_detail(&detail))
+}
+
+/// Fetch full detail for one OSV ID and extract its CVSS base score and
+/// vector. Returns a `VulnDetail` with `None` fields if the advisory has
+/// no parseable severity.
+pub async fn query_detail(client: &Client, id: &str) -> Result<VulnDetail> {
     let url = format!("{OSV_VULN_URL_PREFIX}{id}");
     let resp = client
         .get(&url)
@@ -134,7 +150,7 @@ pub async fn query_detail(client: &Client, id: &str) -> Result<Option<f32>> {
         .json()
         .await
         .with_context(|| format!("osv.dev detail response for {id}"))?;
-    Ok(extract_score(&detail))
+    Ok(extract_detail(&detail))
 }
 
 impl OsvQueryResponse {
@@ -147,6 +163,7 @@ impl OsvQueryResponse {
                 summary: raw.summary,
                 details: raw.details,
                 score: None,
+                vector: None,
             })
             .collect()
     }
@@ -283,6 +300,24 @@ mod tests {
         "modified": "2024-01-01T00:00:00Z",
         "database_specific": { "severity": "MODERATE" }
     }"#;
+
+    #[test]
+    fn detail_extracts_vector_with_score() {
+        let d = parse_detail(DETAIL_GHSA).expect("detail");
+        assert!(d.score.is_some());
+        assert_eq!(
+            d.vector.as_deref(),
+            Some("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H")
+        );
+    }
+
+    #[test]
+    fn detail_text_bucket_has_no_vector() {
+        // Vector unparseable → score from text bucket → vector field None
+        let d = parse_detail(DETAIL_TEXT_ONLY).expect("detail");
+        assert!(d.score.is_some());
+        assert_eq!(d.vector, None);
+    }
 
     #[test]
     fn detail_parses_ghsa_cvss_v3() {
