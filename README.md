@@ -1,205 +1,154 @@
-# uptick-zed
+# Uptick
 
 [![CI](https://github.com/stevenbarash/uptick-zed/actions/workflows/ci.yml/badge.svg)](https://github.com/stevenbarash/uptick-zed/actions/workflows/ci.yml)
 
-A [Zed](https://zed.dev) extension that shows the latest available version of each dependency in package manifests — inline "what's the newest release?" feedback for `package.json`, `Cargo.toml`, `pubspec.yaml`, and `composer.json`. Inspired by the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension (see [Acknowledgements](#acknowledgements)).
-
-Supports:
-
-| Manifest          | Registry                  |
-| ----------------- | ------------------------- |
-| `package.json`    | [registry.npmjs.org](https://registry.npmjs.org) |
-| `Cargo.toml`      | [crates.io](https://crates.io) |
-| `pubspec.yaml`    | [pub.dev](https://pub.dev) |
-| `composer.json`   | [Packagist](https://packagist.org) |
-
-See the [Roadmap](#roadmap) for what's not yet supported.
-
-## What it looks like
-
-Each dependency gets an inlay hint next to the version literal:
-
-```jsonc
-{
-  "dependencies": {
-    "react": "^18.2.0"   → 18.3.1
-  }
-}
-```
+**Know your dependencies at a glance.** Uptick is a [Zed](https://zed.dev) extension that shows the latest version of every dependency in your manifest — and flags the ones with known vulnerabilities, by severity — without leaving your editor.
 
 ```toml
 [dependencies]
-serde = "1.0.100"   → 1.0.228
-tokio = { version = "1.35" }   ✓ 1.35.1
+serde   = "1.0.100"   → 1.0.228
+tokio   = { version = "1.35" }   ✓ 1.35.1
 ```
-
-A `✓` means the latest release satisfies your range; a `→` means a newer version is available. Out-of-date entries also get an `Information`-level diagnostic, and a `Bump to X.Y.Z` code action that rewrites the literal while preserving the semver operator (`^`, `~`, `>=`, …).
-
-Hover over any dependency name or version for a summary with a link to the registry page.
-
-### Vulnerability scanning
-
-Every parseable `(ecosystem, name, version)` is queried against [osv.dev](https://osv.dev). Known-vulnerable pins surface as LSP diagnostics in the Problems panel, with the GHSA/CVE ID as the diagnostic code:
 
 ```jsonc
 {
   "dependencies": {
-    "lodash": "4.17.15"   // ⚠ GHSA-jf85-cpcp-j695: Prototype Pollution in lodash
+    "react":  "^18.2.0",                   → 18.3.1
+    "lodash": "4.17.15"  // ⛔ GHSA-35jh-r3h4-6jhm: Command Injection in lodash
   }
 }
 ```
 
-A lenient version parser handles npm-style shorthand (`^1.2`, `~1`, `1.x`, `>=1.0 <2.0`, hyphen/OR ranges) where upstream tools silently skip them.
+`✓` already up to date. `→` newer version available. `⛔` known vulnerability — colored by severity.
 
-**Severity (v0.3+):** each advisory's CVSS base score is fetched separately and bucketed:
+---
 
-| CVSS base score | Bucket | LSP severity |
+## What you get
+
+- **Latest versions, inline.** Every dependency is annotated with the current upstream version. Out-of-date ones get a one-keystroke `Bump to X.Y.Z` code action that preserves your `^`, `~`, `>=` operator.
+- **Vulnerability scanning.** Each pinned version is checked against [osv.dev](https://osv.dev). Known-vulnerable versions surface as LSP diagnostics with the GHSA or CVE ID as the code.
+- **Severity that means something.** Each advisory's CVSS base score is fetched separately and mapped to a real editor severity — Critical and High advisories appear red, not buried in a sea of yellow.
+
+| CVSS base score | Severity in editor |
+|---|---|
+| 9.0 – 10.0 (Critical) | `Error` |
+| 7.0 – 8.9 (High) | `Error` |
+| 4.0 – 6.9 (Medium) | `Warning` |
+| 0.1 – 3.9 (Low) | `Information` |
+| Unknown | `Warning` |
+
+`lodash@4.17.15` produces six diagnostics: three red (Command Injection, Prototype Pollution, Code Injection) and three yellow (ReDoS and prototype-pollution variants). At a glance you know what to fix first.
+
+---
+
+## Supported manifests
+
+| Manifest | Registry | Vulnerability source |
 |---|---|---|
-| 9.0 – 10.0 | Critical | `Error` |
-| 7.0 – 8.9 | High | `Error` |
-| 4.0 – 6.9 | Medium | `Warning` |
-| 0.1 – 3.9 | Low | `Information` |
-| (no score) | — | `Warning` |
+| `package.json` | [npm](https://registry.npmjs.org) | osv.dev (npm ecosystem) |
+| `Cargo.toml` | [crates.io](https://crates.io) | osv.dev (crates.io ecosystem) |
+| `pubspec.yaml` | [pub.dev](https://pub.dev) | osv.dev (Pub ecosystem) |
+| `composer.json` | [Packagist](https://packagist.org) | osv.dev (Packagist ecosystem) |
 
-So `lodash@4.17.15` produces 3 `Error`-severity diagnostics (Critical/High GHSAs) and 3 `Warning`-severity ones (Medium GHSAs). Critical/High vulns appear red in the editor; Medium yellow; Low blue.
+More ecosystems on the [roadmap](#roadmap).
 
-## Roadmap
+---
 
-Latest release is **v0.3** — adds CVSS-aligned severity to OSV diagnostics on top of v0.2's vulnerability scanner and v0.1's four-ecosystem version-suggestion baseline. The items below are rough plans, not a schedule; contributions are welcome.
+## Install
 
-### v0.3 — shipped
+Uptick ships as two pieces: the LSP server (`uptick-lsp`) and a thin Zed extension that launches it.
 
-- **CVSS-aligned diagnostic severity.** Each advisory's CVSS base score is fetched via OSV's `/v1/vulns/{id}` endpoint and mapped to an LSP severity bucket (Critical/High → `Error`, Medium → `Warning`, Low → `Information`, no score → `Warning`).
-- **Phase 2.5 detail fan-out.** After the existing `/v1/query` returns vulnerability IDs, uptick fans out per-ID detail requests in parallel (capped by the same OSV semaphore).
-- **`DetailCache` (24h TTL).** Per-advisory severity scores cached by ID. Advisories are essentially immutable once published, so each unique GHSA/CVE is fetched at most once per session even when surfaced across many packages.
-- **`cvss = "2"` dependency** (rustsec/rustsec org). Parses CVSS_V3 vectors; falls back to GHSA `database_specific.severity` text bucket for records without a parseable vector.
-
-### v0.2 — shipped
-
-- **OSV vulnerability scanner.** `Warning` diagnostics for every dependency whose pinned version appears in [osv.dev](https://osv.dev). Source label `uptick`, code = the GHSA/CVE ID so editors can suppress individual advisories.
-- **Lenient version parser** (`parse_for_scan`). Closes the npm coverage gap where upstream sends `1.2` to OSV for `^1.2` (no match — npm needs `x.y.z`); we pad to `1.2.0`. Handles `^1.2`, `~1`, `1.x`, `>=1.0 <2.0`, hyphen and OR ranges. Pure wildcards / non-semver literals (`*`, `latest`, `file:…`, `github:…`) skipped.
-- **Two-phase resolve pipeline.** Version fetches run first, OSV scans run second, both fold into `DocState` and emit diagnostics in one publish.
-- New TTL cache keyed on `(ManifestKind, name, Version)`; empty `Vec` distinguishes "scanned and clean" from cache miss.
-
-### v0.1 — shipped
-
-**Ecosystems**
-
-- npm (`package.json`): `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`.
-- Cargo (`Cargo.toml`): `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, inline-table and block-table detailed forms, one level of `[target.'cfg(…)'.dependencies]`.
-- Pub (`pubspec.yaml`): `dependencies`, `dev_dependencies` (inline scalar entries).
-- Composer (`composer.json`): `require`, `require-dev`, with PHP and `ext-*` meta-packages filtered out.
-
-**LSP features**
-
-- Inlay hints: `→ 1.4.0` when an update is available, `✓ 1.4.0` when the latest already satisfies the user's range.
-- `Information`-level diagnostics on out-of-date entries.
-- `Bump to X.Y.Z` code actions that preserve the semver operator (`^`, `~`, `>=`, …).
-- Markdown hover with a link to the registry page.
-- 1-hour in-memory TTL cache, lazy-evicted on read.
-- Per-host concurrency limits and crates.io's 1-req/sec policy honored.
-- Single retry with 500 ms backoff on transient 5xx.
-- 250 ms debounce on `did_change`; in-flight tasks aborted on close or re-trigger.
-- Fingerprint-based refresh skip — no diagnostic storms on keystrokes that don't change state.
-
-### v0.4 — next up
-
-**More ecosystems**, widest ROI first:
-
-- Maven (`pom.xml`) — XML parsing plus `<parent>` / BOM / property interpolation.
-- .NET (`*.csproj`, `*.fsproj`, `Directory.Packages.props`) — MSBuild XML with imports and floating-version notation.
-- Go (`go.mod`) — `proxy.golang.org`.
-- Python (`pyproject.toml`, `requirements.txt`) — PyPI JSON API.
-- NuGet as a stand-alone target if it isn't already covered by .NET.
-
-**Distribution**
-
-- Prebuilt `uptick-lsp` binaries attached to GitHub releases, auto-downloaded by the WASM extension on first run (the `zed-dependi` pattern). Removes the manual `cargo install` step.
-- Publish to Zed's extension registry once stable.
-
-**Vulnerability UX (next iteration after v0.3 severity)**
-
-- Hover augmentation: surface vuln IDs, CVSS scores, and summaries inside the existing hover popup alongside the registry link.
-- Lockfile-aware scanning — read `package-lock.json` / `Cargo.lock` so the *resolved* install version is scanned rather than the manifest literal.
-- CVSS_V4 vector support once the `cvss` crate or upstream OSV adoption broadens.
-
-### v0.5+ — nice to have
-
-- `--include-prereleases` config flag. Each provider already returns `latest_stable` and `latest_any`; we just always prefer stable today.
-- Persistent on-disk cache across LSP restarts (e.g. `~/.cache/uptick/`).
-- Workspace command: "Bump all outdated".
-- Deprecation warnings — surface npm's `deprecated` field from registry responses.
-- Additional vuln sources beyond OSV (GitHub Advisory Database direct, Snyk, …).
-- Private registry / auth support — read `.npmrc`, Cargo `[registries]`, per-project tokens.
-- Per-ecosystem TTL tuning (npm moves fast, crates.io is slower).
-- Workspace-aware Cargo support — one root `Cargo.toml` covering all workspace members' deps without needing each opened individually.
-- Optional `uptick.toml` per-project config.
-
-### Known limitations in v0.3
-
-- Pubspec entries with `git:` / `path:` / `hosted:` specs are skipped — no single upstream version to compare against.
-- Private registries return 401/403; no credential support yet.
-- Zed's extension API doesn't expose inline decorations directly ([zed#49438](https://github.com/zed-industries/zed/issues/49438)); we use LSP inlay hints, which render at the end of the line rather than above it as a clickable lens. The "bump" UX is `cmd-.` (code actions), not a click.
-- The LSP binary is installed manually via `cargo install --path lsp` until binary distribution lands in v0.4.
-- Vulnerability scans use the manifest literal, not the lockfile-resolved install version. Pinning `^1.0.0` of a package whose latest 1.x is vulnerable will not flag — we scan `1.0.0`.
-- CVSS_V4 vectors aren't parsed yet (cvss 2.x supports v3 only). OSV records carrying only V4 vectors fall through to the `database_specific.severity` text bucket if present, otherwise no severity.
-
-## How it's built
-
-Zed's extension API doesn't (yet — see [zed#49438](https://github.com/zed-industries/zed/issues/49438)) expose inline decorations, but it renders everything a language server publishes. This repo therefore ships two pieces:
-
-- **Root crate (`src/lib.rs`)** — a thin WASM extension (the file Zed loads). It implements `language_server_command()` and launches the LSP binary.
-- **`lsp/`** — a standalone Rust LSP (`uptick-lsp`) that parses the manifest, hits the registry, scans osv.dev for vulnerabilities, caches both for an hour, and publishes inlay hints, diagnostics, code actions, and hovers. The `vulnerabilities/` module runs parallel to `providers/` — version lookups and vuln scans share the cache pattern but stay logically separate.
-
-That separation means `uptick-lsp` is reusable from any LSP-aware editor (Neovim, Helix, …), not just Zed.
-
-## Installation
-
-### 1. Build and install the LSP binary
+**1. Install the LSP server**
 
 ```sh
 cargo install --path lsp
-# or, once the repo is public:
-# cargo install --git https://github.com/stevenbarash/uptick-zed uptick-lsp
 ```
 
 Make sure `~/.cargo/bin` is on your `PATH`.
 
-### 2. Install the Zed extension
-
-While the extension isn't yet in the Zed registry, install it as a dev extension:
+**2. Add the Zed extension**
 
 ```sh
 git clone https://github.com/stevenbarash/uptick-zed
 cd uptick-zed
-# In Zed: run the command `zed: install dev extension` and point it at this folder.
+# In Zed: run `zed: install dev extension`, point it at this folder.
 ```
 
-Open a supported manifest (`package.json`, `Cargo.toml`, `pubspec.yaml`, `composer.json`) and versions should appear within a second or two of the first network round-trip.
+Open any supported manifest. Hints appear within a second of the first network round-trip. That's it.
 
-## Development
+> Set `UPTICK_LOG=debug` to see parse and fetch logs on stderr.
+
+---
+
+## What's new
+
+| Release | Highlight |
+|---|---|
+| [**v0.3.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.3.0) | CVSS-aligned severity. Critical/High → `Error`, Medium → `Warning`, Low → `Information`. |
+| [**v0.2.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.2.0) | Vulnerability scanning. Known-vulnerable pins surface as warnings with GHSA/CVE codes. |
+| [**v0.1.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.1.0) | Inline version hints, hover tooltips, "Bump to X.Y.Z" code actions. |
+
+---
+
+## Roadmap
+
+**Coming next**
+
+- Maven (`pom.xml`), .NET (`*.csproj`, `Directory.Packages.props`), Go (`go.mod`), Python (`pyproject.toml`).
+- Prebuilt LSP binaries on each release — no `cargo install` step.
+- Hover popups that include the CVSS score and advisory summary alongside the registry link.
+- Lockfile-aware vulnerability scanning (read `package-lock.json`, `Cargo.lock`).
+
+**Someday**
+
+- `--include-prereleases` opt-in. Persistent on-disk cache. Workspace command "Bump all outdated". Deprecation warnings. Additional vulnerability sources beyond OSV. Private registry / auth support.
+
+---
+
+## Under the hood
+
+Zed's extension API doesn't (yet — [zed#49438](https://github.com/zed-industries/zed/issues/49438)) expose inline decorations directly. Uptick works around that by shipping a real LSP server and letting Zed render its diagnostics, hovers, and inlay hints. The same server works with Neovim, Helix, or any other LSP-aware editor.
+
+Two crates live here:
+
+- **`src/lib.rs`** — the WASM extension Zed loads. It does one thing: launches the LSP binary.
+- **`lsp/`** — the standalone Rust server. Parses the manifest, queries each registry, scans osv.dev for vulnerabilities, and publishes results.
+
+### Design choices worth knowing
+
+- **Three caches.** `VersionCache` (1h TTL) for upstream version lookups, `VulnCache` (1h TTL) for OSV scan results, `DetailCache` (24h TTL) for per-advisory CVSS scores. Advisories are essentially immutable once published, so the longer Detail TTL holds. None persist across restarts.
+- **Per-host concurrency.** A single shared `reqwest` client with per-registry semaphores: 16 for npm and pub.dev, 8 for Packagist and OSV, 1 for crates.io plus a strict 1 req/sec rate-limit gate.
+- **Lenient version parsing for OSV.** Real npm manifests pin ranges (`^1.2`, `~1`, `1.x`, `>=1.0 <2.0`). `parse_for_scan` normalizes them to a concrete floor version so OSV actually returns matches — closing a coverage gap in upstream tools that send `1.2` to OSV and silently get nothing back.
+- **Severity from CVSS, not heuristics.** Each advisory's CVSS_V3 vector is parsed via the [`cvss`](https://crates.io/crates/cvss) crate (RustSec org). When a vector isn't published, the GHSA `database_specific.severity` text bucket is used as fallback.
+- **Quiet typing.** A 250 ms debounce coalesces keystrokes; a fingerprint dedup skips diagnostic publishes when nothing visible changed.
+
+---
+
+## Known limitations
+
+- Pubspec entries with `git:`, `path:`, or `hosted:` specs are skipped — no single upstream version to compare.
+- Private registries return 401/403; no credential support yet.
+- Zed renders inlay hints at end-of-line, not above as a clickable lens. The bump UX is `cmd-.` (code actions), not a click.
+- The LSP binary is installed manually until binary distribution lands.
+- Vulnerability scans use the manifest literal, not the lockfile-resolved install version. Pinning `^1.0.0` of a package whose latest 1.x is vulnerable will not flag — `1.0.0` is what gets scanned.
+- CVSS_V4 vectors aren't parsed yet. Records carrying only V4 fall through to the text-bucket fallback if present, otherwise no severity.
+
+---
+
+## Develop
 
 ```sh
-cargo test -p uptick-lsp                               # unit tests
-cargo check -p uptick-lsp                              # fast typecheck for inner-loop iteration
-cargo build --target wasm32-wasip1 --release           # build the WASM extension (root package)
-cargo install --path lsp                               # release-build and install the LSP binary
+cargo test  -p uptick-lsp                              # unit tests
+cargo check -p uptick-lsp                              # fast typecheck
+cargo build --target wasm32-wasip1 --release           # build the WASM extension
+cargo install --path lsp                               # install the LSP binary
 ```
 
-Set `UPTICK_LOG=debug` to see parse/fetch logs on stderr.
-
-## Design notes
-
-- **Spans.** We rely on `toml_edit::Document` for TOML, `jsonc_parser`'s AST for JSON/JSONC, and a hand-rolled line scanner for pubspec YAML. All three produce byte ranges that we convert to LSP UTF-16 positions via a small `LineIndex`.
-- **Caching.** Three in-memory `DashMap` caches per server instance: `VersionCache` (1-hour TTL, keyed on `(ecosystem, name)`) for upstream version lookups, `VulnCache` (1-hour TTL, keyed on `(ecosystem, name, Version)`) for OSV scan results, and `DetailCache` (24-hour TTL, keyed on advisory ID alone) for per-advisory CVSS scores. The longer DetailCache TTL reflects that advisories are essentially immutable once published. Empty `Vec<Vulnerability>` in VulnCache distinguishes "scanned and clean" from a miss; `Some(None)` in DetailCache distinguishes "fetched, no severity available" from a miss. None of the caches persist across restarts.
-- **Rate limiting.** The server uses a single `reqwest` client with a 10-second timeout and a descriptive `User-Agent` (crates.io requires this). Per-host semaphores cap concurrency: 16 for npm/pub.dev, 8 for Packagist and OSV, 1 for crates.io plus a min-interval gate. OSV's primary query and severity-detail fetches share the same 8-wide semaphore.
-- **Vulnerability parsing.** OSV's `/v1/query` needs concrete `x.y.z` versions but manifests pin ranges. `version::parse_for_scan` strips operators, narrows to the first alternative, replaces `x`/`*` wildcards with `0`, pads to three components, then parses. Bare wildcards / non-semver literals return `None` and skip the OSV call entirely.
-- **Severity.** Per-advisory CVSS scores come from `/v1/vulns/{id}` (Phase 2.5, runs after the primary scan). Vectors are parsed via the [`cvss`](https://crates.io/crates/cvss) crate (rustsec/rustsec org); a `database_specific.severity` text bucket is used as fallback for records without a parseable vector. `severity_for_score` maps the numeric base score to an LSP severity bucket — see the table above.
-- **Prereleases.** Each provider returns `latest_stable` and `latest_any`; today we always prefer stable. A `--include-prereleases` config flag is the natural next step.
+---
 
 ## Acknowledgements
 
-Inspired by the [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) extension by Peter Flannery and contributors. Uptick is an independent Rust/Zed implementation and shares no source code with the original; it's not affiliated with or endorsed by the upstream project.
+Inspired by [VSCode VersionLens](https://gitlab.com/versionlens/vscode-versionlens) by Peter Flannery and contributors. Uptick is an independent Rust + Zed implementation and shares no source code with the original; it isn't affiliated with or endorsed by the upstream project.
 
 ## License
 
