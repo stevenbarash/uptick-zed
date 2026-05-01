@@ -106,7 +106,7 @@ fn extract_score(detail: &OsvDetailResponse) -> Option<f32> {
         return Some(s);
     }
     // Try any other parseable entry (e.g. CVSS_V2 returns None from cvss_entry_score).
-    let any = detail.severity.iter().find_map(|e| cvss_entry_score(e));
+    let any = detail.severity.iter().find_map(cvss_entry_score);
     if let Some(s) = any {
         return Some(s);
     }
