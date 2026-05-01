@@ -58,15 +58,7 @@ More ecosystems on the [roadmap](#roadmap).
 
 Uptick ships as two pieces: the LSP server (`uptick-lsp`) and a thin Zed extension that launches it.
 
-**1. Install the LSP server**
-
-```sh
-cargo install --path lsp
-```
-
-Make sure `~/.cargo/bin` is on your `PATH`.
-
-**2. Add the Zed extension**
+**1. Add the Zed extension**
 
 ```sh
 git clone https://github.com/stevenbarash/uptick-zed
@@ -74,7 +66,34 @@ cd uptick-zed
 # In Zed: run `zed: install dev extension`, point it at this folder.
 ```
 
-Open any supported manifest. Hints appear within a second of the first network round-trip. That's it.
+On first use, the extension downloads a prebuilt `uptick-lsp` binary from the latest non-prerelease GitHub release, verifies its `.sha256` sidecar, extracts it into Zed's extension cache, and launches it from there. Open any supported manifest. Hints appear within a second of the first network round-trip.
+
+**Manual LSP binary install**
+
+If you want to use a release-candidate binary, run the LSP outside Zed, or skip the extension downloader, download the archive for your platform from [Releases](https://github.com/stevenbarash/uptick-zed/releases):
+
+| Platform | Asset |
+|---|---|
+| Apple Silicon Mac | `uptick-lsp-<version>-aarch64-apple-darwin.tar.gz` |
+| Intel Mac | `uptick-lsp-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux x64 | `uptick-lsp-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x64 | `uptick-lsp-<version>-x86_64-pc-windows-msvc.zip` |
+
+Each archive has a matching `.sha256` file. Verify the download before installing:
+
+```sh
+archive=uptick-lsp-<version>-<target>.tar.gz
+shasum -a 256 -c "$archive.sha256"
+tar -xzf "$archive"
+mkdir -p ~/.local/bin
+install -m 0755 uptick-lsp ~/.local/bin/uptick-lsp
+```
+
+Use the asset version without the leading `v`; for example, tag `v0.3.1-rc2` publishes `uptick-lsp-0.3.1-rc2-x86_64-apple-darwin.tar.gz`.
+
+On Windows, unzip the `.zip`, then put `uptick-lsp.exe` somewhere on your `PATH`.
+
+If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and does not download another copy.
 
 > Set `UPTICK_LOG=debug` to see parse and fetch logs on stderr.
 
@@ -95,7 +114,6 @@ Open any supported manifest. Hints appear within a second of the first network r
 **Coming next**
 
 - Maven (`pom.xml`), .NET (`*.csproj`, `Directory.Packages.props`), Go (`go.mod`), Python (`pyproject.toml`).
-- Prebuilt LSP binaries on each release — no `cargo install` step.
 - Hover popups that include the CVSS score and advisory summary alongside the registry link.
 - Lockfile-aware vulnerability scanning (read `package-lock.json`, `Cargo.lock`).
 
@@ -129,7 +147,6 @@ Two crates live here:
 - Pubspec entries with `git:`, `path:`, or `hosted:` specs are skipped — no single upstream version to compare.
 - Private registries return 401/403; no credential support yet.
 - Zed renders inlay hints at end-of-line, not above as a clickable lens. The bump UX is `cmd-.` (code actions), not a click.
-- The LSP binary is installed manually until binary distribution lands.
 - Vulnerability scans use the manifest literal, not the lockfile-resolved install version. Pinning `^1.0.0` of a package whose latest 1.x is vulnerable will not flag — `1.0.0` is what gets scanned.
 - CVSS_V4 vectors aren't parsed yet. Records carrying only V4 fall through to the text-bucket fallback if present, otherwise no severity.
 
