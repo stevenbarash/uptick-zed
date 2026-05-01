@@ -47,6 +47,7 @@ impl OsvQueryResponse {
                 modified: raw.modified,
                 summary: raw.summary,
                 details: raw.details,
+                score: None,
             })
             .collect()
     }

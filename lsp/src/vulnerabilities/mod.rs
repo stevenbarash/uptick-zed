@@ -20,7 +20,7 @@ use crate::manifest::ManifestKind;
 ///
 /// Fields mirror OSV's `/v1/query` minimal response shape. `id` is the only
 /// guaranteed field (everything else is optional upstream).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Vulnerability {
     /// Unique identifier, e.g. `"GHSA-jf85-cpcp-j695"`.
     pub id: String,
@@ -30,6 +30,9 @@ pub struct Vulnerability {
     pub summary: Option<String>,
     /// Longer description, when provided.
     pub details: Option<String>,
+    /// CVSS base score 0.0–10.0 if any `severity[]` entry parsed, else
+    /// `None`. `None` is rendered as `Warning` (the v0.2 default).
+    pub score: Option<f32>,
 }
 
 /// Map a `ManifestKind` to its OSV ecosystem identifier.
