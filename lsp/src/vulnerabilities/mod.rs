@@ -9,6 +9,8 @@
 pub mod cache;
 pub mod osv;
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use reqwest::Client;
 use semver::Version;
@@ -20,7 +22,7 @@ use crate::manifest::ManifestKind;
 ///
 /// Fields mirror OSV's `/v1/query` minimal response shape. `id` is the only
 /// guaranteed field (everything else is optional upstream).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Vulnerability {
     /// Unique identifier, e.g. `"GHSA-jf85-cpcp-j695"`.
     pub id: String,
@@ -30,6 +32,9 @@ pub struct Vulnerability {
     pub summary: Option<String>,
     /// Longer description, when provided.
     pub details: Option<String>,
+    /// CVSS base score 0.0–10.0 if any `severity[]` entry parsed, else
+    /// `None`. `None` is rendered as `Warning` (the v0.2 default).
+    pub score: Option<f32>,
 }
 
 /// Map a `ManifestKind` to its OSV ecosystem identifier.
@@ -64,6 +69,39 @@ pub async fn fetch_vulns(
     let _permit = OSV_SEM.acquire().await.expect("OSV semaphore");
     let ecosystem = osv_ecosystem(kind);
     osv::query(client, ecosystem, name, &version.to_string()).await
+}
+
+/// Fan out per-ID detail fetches in parallel, sharing the OSV semaphore
+/// with the query path. Returns one entry per ID; entries with failures
+/// or no parseable severity are returned as `(id, None)`.
+///
+/// Caller is responsible for stashing the result in `DetailCache`.
+pub async fn fetch_vuln_details(client: &Client, ids: &[String]) -> HashMap<String, Option<f32>> {
+    use futures::stream::StreamExt;
+    let mut futs = futures::stream::FuturesUnordered::new();
+    for id in ids {
+        let id = id.clone();
+        let client = client.clone();
+        futs.push(async move {
+            let _permit = OSV_SEM.acquire().await.expect("OSV semaphore");
+            let res = osv::query_detail(&client, &id).await;
+            (id, res)
+        });
+    }
+    let mut out = HashMap::with_capacity(ids.len());
+    while let Some((id, res)) = futs.next().await {
+        match res {
+            Ok(score) => {
+                out.insert(id, score);
+            }
+            Err(e) => {
+                tracing::warn!(%id, "OSV detail fetch failed: {e:#}");
+                // On error, do NOT insert — caller treats missing as
+                // "retry next time" (consistent with VulnCache behaviour).
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

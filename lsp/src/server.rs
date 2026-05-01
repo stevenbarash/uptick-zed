@@ -32,12 +32,18 @@ use crate::manifest::{ManifestKind, RawEntry};
 use crate::parsers;
 use crate::providers;
 use crate::version;
-use crate::vulnerabilities::{cache::VulnCache, Vulnerability};
+use crate::vulnerabilities::{
+    cache::{DetailCache, VulnCache},
+    Vulnerability,
+};
 
 /// How long a fetched version stays usable before we re-query the registry.
 /// A one-hour window balances freshness against politeness across all four
 /// registries.
 const CACHE_TTL: Duration = Duration::from_secs(3600);
+/// Vulnerabilities are essentially immutable once published, so we
+/// can cache severity scores much longer than version metadata.
+const DETAIL_TTL: Duration = Duration::from_secs(24 * 3600);
 
 /// Debounce window applied to `did_change`. Short enough that users see
 /// updates within a pause in typing, long enough that holding a key down
@@ -91,6 +97,7 @@ pub struct Backend {
     http: Client,
     cache: Arc<VersionCache>,
     vuln_cache: Arc<VulnCache>,
+    detail_cache: Arc<DetailCache>,
     /// Current parsed state of every open document. Keyed by URI.
     docs: Arc<DashMap<Url, Arc<DocState>>>,
     /// Last-pushed fingerprint per doc. Skips the refresh/diagnostics storm
@@ -117,6 +124,7 @@ impl Backend {
             http,
             cache: Arc::new(VersionCache::new(CACHE_TTL)),
             vuln_cache: Arc::new(VulnCache::new(CACHE_TTL)),
+            detail_cache: Arc::new(DetailCache::new(DETAIL_TTL)),
             docs: Arc::new(DashMap::new()),
             pushed: Arc::new(DashMap::new()),
             pending: Arc::new(DashMap::new()),
@@ -174,6 +182,7 @@ impl Backend {
         let http = self.http.clone();
         let cache = self.cache.clone();
         let vuln_cache = self.vuln_cache.clone();
+        let detail_cache = self.detail_cache.clone();
         let docs = self.docs.clone();
         let pushed = self.pushed.clone();
         let pending = self.pending.clone();
@@ -193,6 +202,7 @@ impl Backend {
                 &http,
                 &cache,
                 &vuln_cache,
+                &detail_cache,
                 &docs,
                 &pushed,
                 &uri_key,
@@ -212,6 +222,7 @@ async fn resolve_and_push(
     http: &Client,
     cache: &Arc<VersionCache>,
     vuln_cache: &Arc<VulnCache>,
+    detail_cache: &Arc<DetailCache>,
     docs: &DashMap<Url, Arc<DocState>>,
     pushed: &DashMap<Url, u64>,
     uri: &Url,
@@ -287,6 +298,32 @@ async fn resolve_and_push(
         }
     }
 
+    // --- Phase 2.5: per-ID severity detail fetches ---
+    //
+    // Collect every unique vuln ID we've now cached for any (kind, name,
+    // version) currently visible. For IDs whose severity we've never
+    // fetched, fan out /v1/vulns/{id} requests in parallel.
+    let mut detail_ids: HashSet<String> = HashSet::new();
+    for a in &state.entries {
+        if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
+            if let Some(vulns) = vuln_cache.get(kind, &a.entry.name, &ver) {
+                for v in vulns {
+                    if detail_cache.get(&v.id).is_none() {
+                        detail_ids.insert(v.id);
+                    }
+                }
+            }
+        }
+    }
+
+    if !detail_ids.is_empty() {
+        let ids: Vec<String> = detail_ids.into_iter().collect();
+        let scores = crate::vulnerabilities::fetch_vuln_details(http, &ids).await;
+        for (id, score) in scores {
+            detail_cache.put(id, score);
+        }
+    }
+
     // --- Fold both results back into DocState ---
     //
     // `alter` is a no-op if the doc has been closed in the meantime — a
@@ -304,6 +341,13 @@ async fn resolve_and_push(
                     // Sort so the fingerprint is deterministic regardless of
                     // scan-completion order.
                     vulns.sort_by(|x, y| x.id.cmp(&y.id));
+                    for v in &mut vulns {
+                        // Outer Some = cached at all; inner Option<f32> = the score itself.
+                        // Unfetched IDs leave score as None (renders as Warning).
+                        if let Some(score) = detail_cache.get(&v.id) {
+                            v.score = score;
+                        }
+                    }
                     a.vulns = vulns;
                 }
             }
@@ -348,6 +392,16 @@ fn fingerprint(state: &DocState) -> u64 {
         a.vulns.len().hash(&mut h);
         for v in &a.vulns {
             v.id.hash(&mut h);
+            // Hash a discriminant + bit pattern so a late-arriving
+            // severity score invalidates the fingerprint and the
+            // re-rendered diagnostic reaches the editor.
+            match v.score {
+                None => 0u8.hash(&mut h),
+                Some(s) => {
+                    1u8.hash(&mut h);
+                    s.to_bits().hash(&mut h);
+                }
+            }
         }
     }
     h.finish()
@@ -384,6 +438,24 @@ async fn push_updates_raw(
     let _ = client.code_lens_refresh().await;
 }
 
+/// Map a CVSS-aligned score to an LSP diagnostic severity.
+///
+/// Buckets:
+///   9.0+     → Error    (Critical)
+///   7.0–8.9  → Error    (High)
+///   4.0–6.9  → Warning  (Medium)
+///   0.1–3.9  → Information (Low)
+///   None     → Warning  (default; preserves v0.2 behaviour for
+///                        advisories with no parseable severity)
+fn severity_for_score(score: Option<f32>) -> DiagnosticSeverity {
+    match score {
+        Some(s) if s >= 7.0 => DiagnosticSeverity::ERROR,
+        Some(s) if s >= 4.0 => DiagnosticSeverity::WARNING,
+        Some(s) if s > 0.0 => DiagnosticSeverity::INFORMATION,
+        _ => DiagnosticSeverity::WARNING,
+    }
+}
+
 /// Produce diagnostics for every entry: `Information`-level for update
 /// availability, and `Warning`-level for known vulnerabilities.
 fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
@@ -418,7 +490,7 @@ fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
             let id = &v.id;
             out.push(Diagnostic {
                 range: a.entry.version_range,
-                severity: Some(DiagnosticSeverity::WARNING),
+                severity: Some(severity_for_score(v.score)),
                 source: Some(DIAGNOSTIC_SOURCE.into()),
                 code: Some(NumberOrString::String(v.id.clone())),
                 message: format!("{id}: {message}"),

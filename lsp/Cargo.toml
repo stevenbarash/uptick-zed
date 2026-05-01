@@ -25,6 +25,7 @@ jsonc-parser = { version = "0.32", features = ["serde"] }
 semver = "1"
 dashmap = "6"
 anyhow = "1"
+cvss = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
