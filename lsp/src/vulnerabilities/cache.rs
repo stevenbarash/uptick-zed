@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use semver::Version;
 
 use crate::manifest::ManifestKind;
-use crate::vulnerabilities::Vulnerability;
+use crate::vulnerabilities::{VulnDetail, Vulnerability};
 
 /// Thread-safe TTL cache of OSV query results.
 ///
@@ -71,9 +71,10 @@ impl VulnCache {
     }
 }
 
-/// Per-ID TTL cache of OSV severity scores. Keyed by bare advisory ID
-/// (e.g. `"GHSA-jf85-cpcp-j695"`). Values are `Option<f32>` so `Some(None)`
-/// distinguishes "fetched, no score available" from a cache miss.
+/// Per-ID TTL cache of OSV severity details (score + CVSS vector). Keyed
+/// by bare advisory ID (e.g. `"GHSA-jf85-cpcp-j695"`). A `Some(VulnDetail)`
+/// with all-`None` inner fields distinguishes "fetched, no severity
+/// available" from a cache miss (`None`).
 ///
 /// Advisories are essentially immutable once published, so the TTL can
 /// be longer than the version-info TTL (24 hours by default).
@@ -84,7 +85,7 @@ pub struct DetailCache {
 
 #[derive(Clone)]
 struct DetailEntry {
-    score: Option<f32>,
+    detail: VulnDetail,
     at: Instant,
 }
 
@@ -96,21 +97,21 @@ impl DetailCache {
         }
     }
 
-    pub fn get(&self, id: &str) -> Option<Option<f32>> {
+    pub fn get(&self, id: &str) -> Option<VulnDetail> {
         let entry = self.entries.get(id)?;
         if entry.at.elapsed() > self.ttl {
             drop(entry);
             self.entries.remove(id);
             return None;
         }
-        Some(entry.score)
+        Some(entry.detail.clone())
     }
 
-    pub fn put(&self, id: String, score: Option<f32>) {
+    pub fn put(&self, id: String, detail: VulnDetail) {
         self.entries.insert(
             id,
             DetailEntry {
-                score,
+                detail,
                 at: Instant::now(),
             },
         );
@@ -135,6 +136,7 @@ mod tests {
             summary: None,
             details: None,
             score: None,
+            vector: None,
         }
     }
 
@@ -219,28 +221,44 @@ mod tests {
     #[test]
     fn detail_put_get_some() {
         let c = DetailCache::new(Duration::from_secs(60));
-        c.put("GHSA-x".to_string(), Some(7.5));
-        assert_eq!(c.get("GHSA-x"), Some(Some(7.5)));
+        c.put(
+            "GHSA-x".to_string(),
+            VulnDetail {
+                score: Some(7.5),
+                vector: Some("CVSS:3.1/AV:N".to_string()),
+            },
+        );
+        let got = c.get("GHSA-x").unwrap();
+        assert_eq!(got.score, Some(7.5));
+        assert_eq!(got.vector.as_deref(), Some("CVSS:3.1/AV:N"));
     }
 
     #[test]
     fn detail_put_get_none_score() {
         let c = DetailCache::new(Duration::from_secs(60));
-        c.put("GHSA-y".to_string(), None);
-        assert_eq!(c.get("GHSA-y"), Some(None));
+        c.put("GHSA-y".to_string(), VulnDetail::default());
+        let got = c.get("GHSA-y").unwrap();
+        assert_eq!(got.score, None);
+        assert_eq!(got.vector, None);
     }
 
     #[test]
     fn detail_miss_returns_none() {
         let c = DetailCache::new(Duration::from_secs(60));
-        assert_eq!(c.get("missing"), None);
+        assert!(c.get("missing").is_none());
     }
 
     #[test]
     fn detail_ttl_expires() {
         let c = DetailCache::new(Duration::from_millis(50));
-        c.put("GHSA-z".to_string(), Some(5.0));
+        c.put(
+            "GHSA-z".to_string(),
+            VulnDetail {
+                score: Some(5.0),
+                vector: None,
+            },
+        );
         std::thread::sleep(Duration::from_millis(80));
-        assert_eq!(c.get("GHSA-z"), None);
+        assert!(c.get("GHSA-z").is_none());
     }
 }

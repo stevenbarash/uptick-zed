@@ -317,9 +317,9 @@ async fn resolve_and_push(
 
     if !detail_ids.is_empty() {
         let ids: Vec<String> = detail_ids.into_iter().collect();
-        let scores = crate::vulnerabilities::fetch_vuln_details(http, &ids).await;
-        for (id, score) in scores {
-            detail_cache.put(id, score);
+        let details = crate::vulnerabilities::fetch_vuln_details(http, &ids).await;
+        for (id, detail) in details {
+            detail_cache.put(id, detail);
         }
     }
 
@@ -341,8 +341,9 @@ async fn resolve_and_push(
                     // scan-completion order.
                     vulns.sort_by(|x, y| x.id.cmp(&y.id));
                     for v in &mut vulns {
-                        if let Some(score) = detail_cache.get(&v.id) {
-                            v.score = score;
+                        if let Some(detail) = detail_cache.get(&v.id) {
+                            v.score = detail.score;
+                            v.vector = detail.vector;
                         }
                     }
                     a.vulns = vulns;
@@ -433,6 +434,19 @@ async fn push_updates_raw(
     // still send them so editors that *do* support them pick up the update.
     let _ = client.inlay_hint_refresh().await;
     let _ = client.code_lens_refresh().await;
+}
+
+/// Human-readable severity bucket for a CVSS base score. Used in hover
+/// markdown to show a label next to the advisory id. `None` becomes
+/// `"UNKNOWN"`.
+fn severity_label(score: Option<f32>) -> &'static str {
+    match score {
+        Some(s) if s >= 9.0 => "CRITICAL",
+        Some(s) if s >= 7.0 => "HIGH",
+        Some(s) if s >= 4.0 => "MEDIUM",
+        Some(s) if s > 0.0 => "LOW",
+        _ => "UNKNOWN",
+    }
 }
 
 /// Map a CVSS base score to an LSP diagnostic severity. `None` defaults
@@ -668,6 +682,36 @@ impl LanguageServer for Backend {
             .and_then(|info| info.url)
         {
             write!(md, "\n[registry]({url})").unwrap();
+        }
+
+        // Vulnerability section: one block per advisory affecting the
+        // parsed literal. Severity badge + id, summary, CVSS vector, and
+        // a link to the osv.dev page. Anything missing is silently
+        // skipped — the badge and id are the only fields guaranteed.
+        if !hit.vulns.is_empty() {
+            md.push_str("\n\n---\n");
+            for v in &hit.vulns {
+                let label = severity_label(v.score);
+                write!(md, "\n**{label}** `{id}`", id = v.id).unwrap();
+                if let Some(score) = v.score {
+                    write!(md, " · score {score:.1}").unwrap();
+                }
+                md.push('\n');
+                if let Some(summary) = v.summary.as_deref().filter(|s| !s.is_empty()) {
+                    let summary = summary.replace('`', "'");
+                    writeln!(md, "\n{summary}").unwrap();
+                }
+                if let Some(vector) = v.vector.as_deref() {
+                    let vector = vector.replace('`', "'");
+                    writeln!(md, "\nCVSS: `{vector}`").unwrap();
+                }
+                writeln!(
+                    md,
+                    "\n[osv.dev](https://osv.dev/vulnerability/{id})",
+                    id = v.id
+                )
+                .unwrap();
+            }
         }
 
         Ok(Some(Hover {
