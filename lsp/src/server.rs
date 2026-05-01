@@ -298,6 +298,32 @@ async fn resolve_and_push(
         }
     }
 
+    // --- Phase 2.5: per-ID severity detail fetches ---
+    //
+    // Collect every unique vuln ID we've now cached for any (kind, name,
+    // version) currently visible. For IDs whose severity we've never
+    // fetched, fan out /v1/vulns/{id} requests in parallel.
+    let mut detail_ids: HashSet<String> = HashSet::new();
+    for a in &state.entries {
+        if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
+            if let Some(vulns) = vuln_cache.get(kind, &a.entry.name, &ver) {
+                for v in vulns {
+                    if detail_cache.get(&v.id).is_none() {
+                        detail_ids.insert(v.id);
+                    }
+                }
+            }
+        }
+    }
+
+    if !detail_ids.is_empty() {
+        let ids: Vec<String> = detail_ids.into_iter().collect();
+        let scores = crate::vulnerabilities::fetch_vuln_details(http, &ids).await;
+        for (id, score) in scores {
+            detail_cache.put(id, score);
+        }
+    }
+
     // --- Fold both results back into DocState ---
     //
     // `alter` is a no-op if the doc has been closed in the meantime — a
@@ -315,6 +341,13 @@ async fn resolve_and_push(
                     // Sort so the fingerprint is deterministic regardless of
                     // scan-completion order.
                     vulns.sort_by(|x, y| x.id.cmp(&y.id));
+                    for v in &mut vulns {
+                        // Outer Some = cached at all; inner Option<f32> = the score itself.
+                        // Unfetched IDs leave score as None (renders as Warning).
+                        if let Some(score) = detail_cache.get(&v.id) {
+                            v.score = score;
+                        }
+                    }
                     a.vulns = vulns;
                 }
             }
