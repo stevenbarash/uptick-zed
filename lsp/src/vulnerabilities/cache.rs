@@ -71,6 +71,52 @@ impl VulnCache {
     }
 }
 
+/// Per-ID TTL cache of OSV severity scores. Keyed by bare advisory ID
+/// (e.g. `"GHSA-jf85-cpcp-j695"`). Values are `Option<f32>` so `Some(None)`
+/// distinguishes "fetched, no score available" from a cache miss.
+///
+/// Advisories are essentially immutable once published, so the TTL can
+/// be longer than the version-info TTL (24 hours by default).
+pub struct DetailCache {
+    entries: DashMap<String, DetailEntry>,
+    ttl: Duration,
+}
+
+#[derive(Clone)]
+struct DetailEntry {
+    score: Option<f32>,
+    at: Instant,
+}
+
+impl DetailCache {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            entries: DashMap::new(),
+            ttl,
+        }
+    }
+
+    pub fn get(&self, id: &str) -> Option<Option<f32>> {
+        let entry = self.entries.get(id)?;
+        if entry.at.elapsed() > self.ttl {
+            drop(entry);
+            self.entries.remove(id);
+            return None;
+        }
+        Some(entry.score)
+    }
+
+    pub fn put(&self, id: String, score: Option<f32>) {
+        self.entries.insert(
+            id,
+            DetailEntry {
+                score,
+                at: Instant::now(),
+            },
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread::sleep;
@@ -168,5 +214,33 @@ mod tests {
         c.put(ManifestKind::Npm, "foo".to_string(), v2.clone(), vec![]);
         assert_eq!(c.get(ManifestKind::Npm, "foo", &v1).unwrap()[0].id, "A");
         assert_eq!(c.get(ManifestKind::Npm, "foo", &v2), Some(vec![]));
+    }
+
+    #[test]
+    fn detail_put_get_some() {
+        let c = DetailCache::new(Duration::from_secs(60));
+        c.put("GHSA-x".to_string(), Some(7.5));
+        assert_eq!(c.get("GHSA-x"), Some(Some(7.5)));
+    }
+
+    #[test]
+    fn detail_put_get_none_score() {
+        let c = DetailCache::new(Duration::from_secs(60));
+        c.put("GHSA-y".to_string(), None);
+        assert_eq!(c.get("GHSA-y"), Some(None));
+    }
+
+    #[test]
+    fn detail_miss_returns_none() {
+        let c = DetailCache::new(Duration::from_secs(60));
+        assert_eq!(c.get("missing"), None);
+    }
+
+    #[test]
+    fn detail_ttl_expires() {
+        let c = DetailCache::new(Duration::from_millis(50));
+        c.put("GHSA-z".to_string(), Some(5.0));
+        std::thread::sleep(Duration::from_millis(80));
+        assert_eq!(c.get("GHSA-z"), None);
     }
 }
