@@ -398,6 +398,8 @@ async fn resolve_and_push(
     if !to_fetch.is_empty() {
         use futures::StreamExt;
         registry_attempted = to_fetch.len();
+        let total = registry_attempted;
+        let mut done = 0usize;
         let mut futs = futures::stream::FuturesUnordered::new();
         for name in to_fetch {
             let http = http.clone();
@@ -411,6 +413,12 @@ async fn resolve_and_push(
                 }
                 Err(e) => warn!(?name, "registry lookup failed: {e:#}"),
             }
+            done += 1;
+            // Per-package counter — drives the live "N/M packages"
+            // string clients render under the progress title. Skipped
+            // by `report_progress` when `begin_progress` was below the
+            // banner threshold.
+            report_progress(client, progress_token.as_ref(), done, total).await;
         }
     }
 
@@ -565,12 +573,49 @@ async fn begin_progress(
             value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(WorkDoneProgressBegin {
                 title: format!("Uptick: resolving {pending} packages"),
                 cancellable: Some(false),
-                message: None,
-                percentage: None,
+                message: Some(format!("0/{pending}")),
+                // Seed at 0 so clients that render a bar know to allocate
+                // one — subsequent `Report`s update it.
+                percentage: Some(0),
             })),
         })
         .await;
     Some(token)
+}
+
+/// Emit a `$/progress` Report notification under `token`. Silently
+/// skipped if `token` is `None` (sub-threshold burst). `done` is the
+/// number of fetches completed; `total` is the burst size set at
+/// `begin_progress`.
+async fn report_progress(
+    client: &LspClient,
+    token: Option<&NumberOrString>,
+    done: usize,
+    total: usize,
+) {
+    let Some(token) = token else {
+        return;
+    };
+    // `checked_div` here is purely to satisfy clippy::manual_checked_ops
+    // — the surrounding burst will only ever invoke `report_progress`
+    // with `total > 0` (we early-return otherwise), but the explicit
+    // form keeps the lint quiet and the saturating fallback honest.
+    let pct = (done * 100)
+        .checked_div(total)
+        .map(|p| p.min(100) as u32)
+        .unwrap_or(100);
+    client
+        .send_notification::<ProgressNotification>(ProgressParams {
+            token: token.clone(),
+            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
+                WorkDoneProgressReport {
+                    cancellable: Some(false),
+                    message: Some(format!("{done}/{total}")),
+                    percentage: Some(pct),
+                },
+            )),
+        })
+        .await;
 }
 
 /// Pair with `begin_progress` — only sends `End` if `begin` actually
@@ -846,6 +891,13 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _p: InitializedParams) {
         debug!("{SERVER_NAME} ready");
+        // Fire the once-per-user welcome toast off the critical path —
+        // the LSP must come up even if the state-dir write fails or
+        // the client takes its time responding.
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            crate::onboarding::maybe_send_welcome(client).await;
+        });
     }
 
     async fn shutdown(&self) -> LspResult<()> {

@@ -122,6 +122,51 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 
 ---
 
+## First run
+
+Open a `package.json`, `Cargo.toml`, `pubspec.yaml`, `composer.json`, `go.mod`, or `pom.xml`. As each dep resolves you'll see:
+
+- An inline `→ X.Y.Z` next to every out-of-date dependency, `✓ X.Y.Z` for up-to-date pins, and `⛔` markers on known-vulnerable versions.
+- A hover with the registry link, current vs. latest, lockfile-resolved version (if any), and full CVSS detail for each advisory.
+- A `quickfix` code action — `Bump to X.Y.Z` — on every out-of-date line. Operator (`^`, `~`, `>=`) is preserved.
+
+### Two settings worth enabling
+
+Zed ships these off by default. Both unlock UI that uptick already emits:
+
+```jsonc
+// ~/.config/zed/settings.json
+{
+  // Show uptick's `↑ Bump to X.Y.Z` and `⛔ N advisories — view on osv.dev`
+  // lenses above each dependency line. One click, no command palette.
+  "code_lens": "on",
+
+  // Auto-install uptick on first launch — handy when you sync settings
+  // across machines and don't want to re-install the extension by hand.
+  "auto_install_extensions": {
+    "uptick": true
+  }
+}
+```
+
+Reference: [Zed all settings](https://zed.dev/docs/reference/all-settings).
+
+### What the editor surfaces
+
+| Where | What you see |
+|---|---|
+| Inline next to each version | `→ 1.2.3` newer / `✓ 1.2.3` current / `⛔ 1.2.0` vulnerable |
+| Code lens above each line (with `code_lens: "on"`) | `↑ Bump to X.Y.Z`, `⛔ N advisories — view on osv.dev` |
+| Hover | Registry link, current vs. latest, lockfile resolution, CVSS detail |
+| Code action (`⌥ + .`) | `Bump to X.Y.Z` quickfix |
+| Document link | Click the package name → registry page. Click a vulnerable literal → osv.dev advisory |
+| Progress banner | `Uptick: resolving N packages — 8/42` during the cold-cache burst |
+| Line-0 diagnostic banner | `Uptick: no registry reachable — check network/proxy` if every registry call in a burst failed |
+
+You only see the welcome toast once, the first time the LSP comes up; the flag lives under `$XDG_STATE_HOME/uptick/` or `~/.local/state/uptick/` (Linux), `~/Library/Application Support/uptick/` (macOS), or `%LOCALAPPDATA%\uptick\` (Windows).
+
+---
+
 ## What's new
 
 | Release | Highlight |

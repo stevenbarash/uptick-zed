@@ -29,6 +29,7 @@
 pub mod cache;
 pub mod lockfiles;
 pub mod manifest;
+pub mod onboarding;
 pub mod parsers;
 pub mod position;
 pub mod providers;
