@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/stevenbarash/uptick-zed/actions/workflows/ci.yml/badge.svg)](https://github.com/stevenbarash/uptick-zed/actions/workflows/ci.yml)
 [![Release](https://github.com/stevenbarash/uptick-zed/actions/workflows/release.yml/badge.svg)](https://github.com/stevenbarash/uptick-zed/actions/workflows/release.yml)
+
 **Know your dependencies at a glance.** Uptick is a [Zed](https://zed.dev) extension that shows the latest version of every dependency in your manifest — and flags the ones with known vulnerabilities, by severity — without leaving your editor.
 
 ```toml
