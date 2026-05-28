@@ -4,6 +4,32 @@ All notable changes to **Uptick** are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-05-28
+
+### Added
+- `$/progress` reports during the initial resolve burst. Bursts of
+  `PROGRESS_THRESHOLD` (5) or more uncached packages publish a
+  `window/workDoneProgress` "Uptick: resolving N packages…" indicator
+  so first-open on large manifests no longer looks like the server
+  did nothing for a second.
+- Line-0 banner diagnostic ("Uptick: no registry reachable — check
+  network/proxy") published when an entire registry-fetch burst fails
+  end-to-end. Cleared automatically on the next burst that succeeds.
+  Prevents the "no inlay hints, no error, no idea why" experience for
+  users behind a corporate proxy / offline / DNS-broken.
+- `DocState.network_failure` field plus `fingerprint` integration so the
+  banner flips invalidate the per-doc dedup and actually reach the
+  editor.
+
+### Changed
+- `install.sh` PATH-not-set advisory now detects the user's `$SHELL`
+  and prints a single copy-pasteable line (zsh → `~/.zshrc`; bash →
+  `~/.bash_profile` on macOS / `~/.bashrc` on Linux; fish →
+  `fish_add_path`).
+- `install.sh` ends with a "Next steps" block that includes a one-line
+  smoke test (`echo … > /tmp/uptick-smoke.json && zed …`) so new users
+  can immediately verify the install works end-to-end.
+
 ## [0.5.0] - 2026-05-28
 
 ### Added
@@ -78,6 +104,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Manifest support for `package.json`, `Cargo.toml`, `pubspec.yaml`, and
   `composer.json`.
 
+[0.5.1]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.1
 [0.5.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.0
 [0.4.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.4.0
 [0.3.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.3.0

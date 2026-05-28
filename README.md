@@ -123,6 +123,7 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 
 | Release | Highlight |
 |---|---|
+| [**v0.5.1**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.1) | Onboarding QOL. `$/progress` indicator during the initial resolve burst, a line-0 banner diagnostic when every registry call fails (no more silent breakage behind proxies), and a shell-aware `install.sh` that prints the exact `PATH` fix and a one-line smoke test. |
 | [**v0.5.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.0) | Document-link + code-lens providers. Package names and vulnerable literals become ctrl-click targets; `↑ Bump to X.Y.Z` and `⛔ N advisories — view on osv.dev` float above each dep line. |
 | [**v0.4.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.4.0) | Hover augmentation for vulnerabilities — severity badge, GHSA/CVE id, summary, CVSS vector, and an osv.dev link, rendered inline next to the registry link. |
 | [**v0.3.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.3.0) | CVSS-aligned severity. Critical/High → `Error`, Medium → `Warning`, Low → `Information`. |

@@ -13,6 +13,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +24,8 @@ use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tower_lsp::jsonrpc::Result as LspResult;
+use tower_lsp::lsp_types::notification::Progress as ProgressNotification;
+use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client as LspClient, LanguageServer};
 use tracing::{debug, warn};
@@ -56,6 +59,15 @@ const DIAGNOSTIC_SOURCE: &str = "uptick";
 /// the code-lens emitters, and the dispatcher can't drift.
 const CMD_BUMP: &str = "uptick.bump";
 const CMD_OPEN: &str = "uptick.open";
+/// Below this many uncached packages, don't bother showing a progress
+/// banner — the resolve burst will finish faster than the banner
+/// itself renders and just flashes.
+const PROGRESS_THRESHOLD: usize = 5;
+/// Message shown via a line-0 banner diagnostic when an entire resolve
+/// burst's registry calls all failed. Cleared on the next burst with
+/// any success.
+const NETWORK_BANNER: &str =
+    "Uptick: no registry reachable — check network/proxy. Set UPTICK_LOG=debug for details.";
 
 /// User-Agent string. crates.io *requires* a descriptive UA — the default
 /// reqwest UA gets 403'd — and the other registries appreciate it too.
@@ -84,6 +96,10 @@ struct Annotated {
 struct DocState {
     kind: ManifestKind,
     entries: Vec<Annotated>,
+    /// `true` when the most recent non-empty resolve burst saw every
+    /// registry call fail — surfaced as a line-0 banner diagnostic so
+    /// the user knows the silence isn't because Uptick is dead.
+    network_failure: bool,
 }
 
 /// The `tower-lsp` service state. One `Backend` exists for the lifetime of
@@ -111,6 +127,9 @@ pub struct Backend {
     /// In-flight debounced resolve tasks, keyed by document. A new `did_change`
     /// aborts the prior task so we only do one network round-trip per burst.
     pending: Arc<DashMap<Url, JoinHandle<()>>>,
+    /// Monotonic counter for `$/progress` tokens, so concurrent resolves
+    /// for different documents don't collide on the same token id.
+    progress_seq: Arc<AtomicU64>,
 }
 
 impl Backend {
@@ -132,6 +151,7 @@ impl Backend {
             docs: Arc::new(DashMap::new()),
             pushed: Arc::new(DashMap::new()),
             pending: Arc::new(DashMap::new()),
+            progress_seq: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -163,8 +183,22 @@ impl Backend {
                 }
             })
             .collect();
-        self.docs
-            .insert(uri.clone(), Arc::new(DocState { kind, entries }));
+        // Preserve the prior banner flag across reparse — `resolve_and_push`
+        // is the only place that should toggle it, so a mid-typing reparse
+        // shouldn't flicker the banner off and back on.
+        let network_failure = self
+            .docs
+            .get(uri)
+            .map(|e| e.network_failure)
+            .unwrap_or(false);
+        self.docs.insert(
+            uri.clone(),
+            Arc::new(DocState {
+                kind,
+                entries,
+                network_failure,
+            }),
+        );
         Some(kind)
     }
 
@@ -193,6 +227,7 @@ impl Backend {
         let pushed = self.pushed.clone();
         let pending = self.pending.clone();
         let client = self.client.clone();
+        let progress_seq = self.progress_seq.clone();
         let uri_key = uri.clone();
 
         let handle = tokio::spawn(async move {
@@ -203,7 +238,16 @@ impl Backend {
             // so a concurrent `schedule_resolve` doesn't see a stale handle
             // and try to abort something that's already finished its sleep.
             pending.remove(&uri_key);
-            resolve_and_push(&client, &http, &caches, &docs, &pushed, &uri_key).await;
+            resolve_and_push(
+                &client,
+                &http,
+                &caches,
+                &docs,
+                &pushed,
+                &progress_seq,
+                &uri_key,
+            )
+            .await;
         });
         self.pending.insert(uri, handle);
     }
@@ -228,6 +272,7 @@ async fn resolve_and_push(
     caches: &Caches,
     docs: &DashMap<Url, Arc<DocState>>,
     pushed: &DashMap<Url, u64>,
+    progress_seq: &AtomicU64,
     uri: &Url,
 ) {
     let cache = &caches.version;
@@ -251,8 +296,16 @@ async fn resolve_and_push(
         .map(|a| a.entry.name.clone())
         .collect();
 
+    // Track registry-call outcomes so we can flip the per-doc banner
+    // diagnostic on (all fail) or off (any success).
+    let mut registry_attempted = 0usize;
+    let mut registry_succeeded = 0usize;
+
+    let progress_token = begin_progress(client, progress_seq, to_fetch.len()).await;
+
     if !to_fetch.is_empty() {
         use futures::StreamExt;
+        registry_attempted = to_fetch.len();
         let mut futs = futures::stream::FuturesUnordered::new();
         for name in to_fetch {
             let http = http.clone();
@@ -260,7 +313,10 @@ async fn resolve_and_push(
         }
         while let Some((name, res)) = futs.next().await {
             match res {
-                Ok(info) => cache.put(kind, name, info),
+                Ok(info) => {
+                    cache.put(kind, name, info);
+                    registry_succeeded += 1;
+                }
                 Err(e) => warn!(?name, "registry lookup failed: {e:#}"),
             }
         }
@@ -363,13 +419,75 @@ async fn resolve_and_push(
                 }
             }
         }
+        // Update the banner only when the burst actually contacted a
+        // registry — a no-op burst (everything already cached) shouldn't
+        // claim "network OK" or stamp out a real outage flag.
+        let network_failure = if registry_attempted > 0 {
+            registry_succeeded == 0
+        } else {
+            existing.network_failure
+        };
         Arc::new(DocState {
             kind: existing.kind,
             entries: new_entries,
+            network_failure,
         })
     });
 
+    end_progress(client, progress_token).await;
     push_updates_raw(client, docs, pushed, uri).await;
+}
+
+/// Ask the client to register a `$/progress` token and emit a `Begin`
+/// notification covering the upcoming resolve burst. Returns the token
+/// so the caller can pair an `End` with it; returns `None` when the
+/// burst is too small to bother (or when the client refused the token).
+async fn begin_progress(
+    client: &LspClient,
+    seq: &AtomicU64,
+    pending: usize,
+) -> Option<NumberOrString> {
+    if pending < PROGRESS_THRESHOLD {
+        return None;
+    }
+    let token = NumberOrString::String(format!(
+        "uptick-resolve-{}",
+        seq.fetch_add(1, Ordering::Relaxed)
+    ));
+    client
+        .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+            token: token.clone(),
+        })
+        .await
+        .ok()?;
+    client
+        .send_notification::<ProgressNotification>(ProgressParams {
+            token: token.clone(),
+            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(WorkDoneProgressBegin {
+                title: format!("Uptick: resolving {pending} packages"),
+                cancellable: Some(false),
+                message: None,
+                percentage: None,
+            })),
+        })
+        .await;
+    Some(token)
+}
+
+/// Pair with `begin_progress` — only sends `End` if `begin` actually
+/// registered a token.
+async fn end_progress(client: &LspClient, token: Option<NumberOrString>) {
+    let Some(token) = token else {
+        return;
+    };
+    client
+        .send_notification::<ProgressNotification>(ProgressParams {
+            token,
+            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(WorkDoneProgressEnd {
+                message: None,
+            })),
+        })
+        .await;
 }
 
 /// Compute a stable fingerprint for the visible state: entry names, their
@@ -382,6 +500,9 @@ async fn resolve_and_push(
 fn fingerprint(state: &DocState) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     state.kind.display().hash(&mut h);
+    // Banner toggles must invalidate the fingerprint so the editor
+    // actually receives the diagnostic flip.
+    (state.network_failure as u8).hash(&mut h);
     for a in &state.entries {
         a.entry.name.hash(&mut h);
         a.entry.version_literal.hash(&mut h);
@@ -505,6 +626,16 @@ fn escape_backticks(s: &str) -> String {
 /// availability, and `Warning`-level for known vulnerabilities.
 fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    if state.network_failure {
+        out.push(Diagnostic {
+            range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+            severity: Some(DiagnosticSeverity::WARNING),
+            source: Some(DIAGNOSTIC_SOURCE.into()),
+            code: Some(NumberOrString::String("network-error".into())),
+            message: NETWORK_BANNER.into(),
+            ..Default::default()
+        });
+    }
     for a in &state.entries {
         let name = &a.entry.name;
 
@@ -1124,6 +1255,33 @@ mod tests {
         assert!(contains(&range, Position::new(4, 999)));
         assert!(!contains(&range, Position::new(1, 99)));
         assert!(!contains(&range, Position::new(5, 3)));
+    }
+
+    #[test]
+    fn network_banner_emitted_only_when_flagged() {
+        // Empty state, no banner.
+        let clean = DocState {
+            kind: ManifestKind::Cargo,
+            entries: vec![],
+            network_failure: false,
+        };
+        assert!(build_diagnostics(&clean).is_empty());
+
+        // Same state with the banner flag → exactly one Warning-level
+        // diagnostic at line 0 carrying the well-known code.
+        let flagged = DocState {
+            kind: ManifestKind::Cargo,
+            entries: vec![],
+            network_failure: true,
+        };
+        let diags = build_diagnostics(&flagged);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(
+            diags[0].code,
+            Some(NumberOrString::String("network-error".into()))
+        );
+        assert_eq!(diags[0].range.start, Position::new(0, 0));
     }
 
     #[test]

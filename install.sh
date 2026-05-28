@@ -146,21 +146,47 @@ note "Installed: $bin_dir/uptick-lsp"
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
   *)
-    cat <<EOF
+    # Surface a shell-specific suggestion when we recognise $SHELL — saves
+    # the user from guessing which rc file to edit. Unknown shells fall
+    # through to the generic list.
+    shell_name="$(basename "${SHELL:-}")"
+    case "$shell_name" in
+      zsh)
+        rc="${ZDOTDIR:-$HOME}/.zshrc"
+        suggestion="echo 'export PATH=\"$bin_dir:\$PATH\"' >> $rc"
+        ;;
+      bash)
+        # macOS bash sources ~/.bash_profile for login shells; Linux bash
+        # uses ~/.bashrc. Pick the one that exists, default to ~/.bashrc.
+        if [ "$uname_s" = "Darwin" ] && [ -f "$HOME/.bash_profile" ]; then
+          rc="$HOME/.bash_profile"
+        else
+          rc="$HOME/.bashrc"
+        fi
+        suggestion="echo 'export PATH=\"$bin_dir:\$PATH\"' >> $rc"
+        ;;
+      fish)
+        suggestion="fish_add_path '$bin_dir'"
+        ;;
+      *)
+        suggestion=""
+        ;;
+    esac
 
-Note: $bin_dir is not on your PATH. Add it by appending one of:
-
-  bash/zsh:  echo 'export PATH="$bin_dir:\$PATH"' >> ~/.zshrc   # or ~/.bashrc
-  fish:      fish_add_path "$bin_dir"
-
-Then restart your shell. Zed launches the binary directly via its absolute
-path when found in its extension cache, so PATH is only needed if you also
-want to run uptick-lsp from a terminal.
-EOF
+    printf '\nNote: %s is not on your PATH.\n' "$bin_dir"
+    if [ -n "$suggestion" ]; then
+      printf '  Run:  %s\n' "$suggestion"
+      printf '  Then restart your shell.\n'
+    else
+      printf '  Add %s to PATH in your shell rc, then restart the shell.\n' "$bin_dir"
+    fi
+    printf 'Zed itself does not need PATH — it launches the binary by absolute\n'
+    printf 'path. This only matters if you also want to run uptick-lsp manually.\n'
     ;;
 esac
 
 # --- Optional repo clone for Zed dev extension -------------------------------
+clone_dir=""
 if [ "$CLONE" -eq 1 ]; then
   clone_dir="$HOME/.local/share/uptick-zed"
   if [ -d "$clone_dir/.git" ]; then
@@ -171,11 +197,30 @@ if [ "$CLONE" -eq 1 ]; then
     mkdir -p "$(dirname "$clone_dir")"
     git clone --depth 1 "https://github.com/$REPO.git" "$clone_dir"
   fi
-  cat <<EOF
-
-Next: in Zed, run the command "zed: install dev extension" and select:
-  $clone_dir
-EOF
 fi
+
+# --- Next steps + smoke test -------------------------------------------------
+cat <<EOF
+
+==> Next steps
+
+  1. Install the Zed extension:
+EOF
+if [ -n "$clone_dir" ]; then
+  printf "       Open Zed → command palette → 'zed: install dev extension'\n"
+  printf "       Select: %s\n" "$clone_dir"
+else
+  printf "       git clone https://github.com/%s ~/.local/share/uptick-zed\n" "$REPO"
+  printf "       Open Zed → command palette → 'zed: install dev extension'\n"
+  printf "       Select: ~/.local/share/uptick-zed\n"
+fi
+cat <<'EOF'
+
+  2. Smoke test — should flag lodash 4.17.15 as critically vulnerable:
+       echo '{"dependencies":{"lodash":"4.17.15"}}' > /tmp/uptick-smoke.json
+       zed /tmp/uptick-smoke.json
+       # → red diagnostic on the literal + '⛔' code lens above the line
+
+EOF
 
 note "Done."
