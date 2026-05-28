@@ -51,6 +51,8 @@ tokio   = { version = "1.35" }   ✓ 1.35.1
 | `Cargo.toml` | [crates.io](https://crates.io) | osv.dev (crates.io ecosystem) |
 | `pubspec.yaml` | [pub.dev](https://pub.dev) | osv.dev (Pub ecosystem) |
 | `composer.json` | [Packagist](https://packagist.org) | osv.dev (Packagist ecosystem) |
+| `go.mod` | [proxy.golang.org](https://proxy.golang.org) | osv.dev (Go ecosystem) |
+| `pom.xml` | [Maven Central](https://central.sonatype.com) | osv.dev (Maven ecosystem) |
 
 More ecosystems on the [roadmap](#roadmap).
 
@@ -124,6 +126,7 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 
 | Release | Highlight |
 |---|---|
+| [**v0.6.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.0) | Go (`go.mod`) and Maven (`pom.xml`) support — two new ecosystems, both with OSV vulnerability scanning. Lockfile-aware vuln scans for `Cargo.lock` + `package-lock.json` (a `^1.0.0` pin whose lockfile resolves `1.0.7` is now scanned as `1.0.7`); hover surfaces `installed: X.Y.Z (lockfile)`. |
 | [**v0.5.1**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.1) | Onboarding QOL. `$/progress` indicator during the initial resolve burst, a line-0 banner diagnostic when every registry call fails (no more silent breakage behind proxies), and a shell-aware `install.sh` that prints the exact `PATH` fix and a one-line smoke test. |
 | [**v0.5.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.0) | Document-link + code-lens providers. Package names and vulnerable literals become ctrl-click targets; `↑ Bump to X.Y.Z` and `⛔ N advisories — view on osv.dev` float above each dep line. |
 | [**v0.4.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.4.0) | Hover augmentation for vulnerabilities — severity badge, GHSA/CVE id, summary, CVSS vector, and an osv.dev link, rendered inline next to the registry link. |
@@ -137,8 +140,9 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 
 **Coming next**
 
-- Maven (`pom.xml`), .NET (`*.csproj`, `Directory.Packages.props`), Go (`go.mod`), Python (`pyproject.toml`).
-- Lockfile-aware vulnerability scanning (read `package-lock.json`, `Cargo.lock`).
+- .NET (`*.csproj`, `Directory.Packages.props`), Python (`pyproject.toml`).
+- Lockfile-aware vuln scanning for Pub (`pubspec.lock`) and Composer (`composer.lock`).
+- Publishing to the Zed extensions registry so install is one click.
 
 **Someday**
 
@@ -169,7 +173,9 @@ Two crates live here:
 
 - Pubspec entries with `git:`, `path:`, or `hosted:` specs are skipped — no single upstream version to compare.
 - Private registries return 401/403; no credential support yet.
-- Vulnerability scans use the manifest literal, not the lockfile-resolved install version. Pinning `^1.0.0` of a package whose latest 1.x is vulnerable will not flag — `1.0.0` is what gets scanned.
+- Lockfile-aware vulnerability scanning is enabled for `Cargo.lock` and `package-lock.json` v2/v3. `pubspec.lock` and `composer.lock` are not yet parsed — for those, scans still use the manifest literal floor.
+- **Maven**: `<version>` entries that inherit from a parent POM (no inline value) or use property references (`${spring.version}`) are skipped — we don't run Maven's parent/property resolver. Versions like `5.3.0.RELEASE`, `2.0.0.Final`, `1.0` are coerced to comparable semver internally; truly exotic shapes (`1.0-SNAPSHOT`, `2.0-M1`) fall through to no `latest` hint.
+- **Go**: pseudo-versions (`v0.0.0-20240101000000-abcdef`, used when no tag exists) fail semver parsing and surface as no `latest` hint. Vulnerability scanning still runs against the pseudo-version string itself.
 - CVSS_V4 vectors aren't parsed yet. Records carrying only V4 fall through to the text-bucket fallback if present, otherwise no severity.
 
 ---

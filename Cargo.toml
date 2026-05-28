@@ -1,6 +1,6 @@
 [package]
 name = "uptick-zed"
-description = "Zed extension that shows the latest version of each dependency in package.json, Cargo.toml, pubspec.yaml, and composer.json."
+description = "Zed extension that shows the latest version of each dependency in package.json, Cargo.toml, pubspec.yaml, composer.json, go.mod, and pom.xml."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,7 +19,7 @@ resolver = "2"
 members = ["lsp"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/stevenbarash/uptick-zed"

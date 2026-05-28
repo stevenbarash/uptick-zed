@@ -13,6 +13,8 @@
 
 pub mod cargo;
 pub mod composer;
+pub mod go;
+pub mod maven;
 pub mod npm;
 pub mod pub_dev;
 
@@ -36,6 +38,8 @@ pub async fn fetch(client: &Client, kind: ManifestKind, name: &str) -> Result<Ve
         ManifestKind::Cargo => cargo::fetch(client, name).await,
         ManifestKind::Pub => pub_dev::fetch(client, name).await,
         ManifestKind::Composer => composer::fetch(client, name).await,
+        ManifestKind::Go => go::fetch(client, name).await,
+        ManifestKind::Maven => maven::fetch(client, name).await,
     }
 }
 
@@ -58,6 +62,13 @@ static PACKAGIST_SEM: Semaphore = Semaphore::const_new(8);
 /// Single-slot semaphore for crates.io. Combined with the min-interval
 /// below, this enforces a strict ≤1 req/sec globally.
 static CRATES_IO_SEM: Semaphore = Semaphore::const_new(1);
+/// Parallelism cap for proxy.golang.org. Google's module proxy is
+/// CDN-fronted; 16 matches npm/pub.dev.
+static GO_SEM: Semaphore = Semaphore::const_new(16);
+/// Parallelism cap for Maven Central. Repo1 is also CDN-fronted, but
+/// metadata XML is heavier than a JSON ping — 8 keeps the per-burst
+/// load modest.
+static MAVEN_SEM: Semaphore = Semaphore::const_new(8);
 
 /// Minimum gap between crates.io requests. 1.1 s (not 1.0 s) leaves a safety
 /// margin so timer jitter and tokio scheduling slop don't nudge us under the
@@ -73,18 +84,24 @@ const CRATES_IO_MIN_INTERVAL: Duration = Duration::from_millis(1100);
 static CRATES_IO_LAST: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Pick the right semaphore for a manifest kind. Returns a `'static`
-/// reference because all four semaphores are module-level statics.
-fn semaphore_for(kind: ManifestKind) -> &'static Semaphore {
+/// reference because every semaphore is a module-level static.
+/// `pub(crate)` so providers that bypass `get_json` (e.g. Maven, which
+/// serves XML rather than JSON) can still acquire the same per-host
+/// permit.
+pub(crate) fn semaphore_for(kind: ManifestKind) -> &'static Semaphore {
     match kind {
         ManifestKind::Npm => &NPM_SEM,
         ManifestKind::Pub => &PUB_SEM,
         ManifestKind::Composer => &PACKAGIST_SEM,
         ManifestKind::Cargo => &CRATES_IO_SEM,
+        ManifestKind::Go => &GO_SEM,
+        ManifestKind::Maven => &MAVEN_SEM,
     }
 }
 
-/// See module docs for network policy. `kind` and `name` are threaded
-/// into every error message so failures point at the right package.
+/// JSON-decoding wrapper around `get_with_retry`. Used by every
+/// provider whose registry serves JSON (npm, crates.io, pub.dev,
+/// Packagist, Go module proxy).
 pub(crate) async fn get_json<T: DeserializeOwned>(
     client: &Client,
     kind: ManifestKind,
@@ -92,9 +109,42 @@ pub(crate) async fn get_json<T: DeserializeOwned>(
     url: &str,
 ) -> Result<T> {
     let registry = kind.display();
+    let resp = get_with_retry(client, kind, name, url).await?;
+    resp.json()
+        .await
+        .with_context(|| format!("{registry} response for {name}"))
+}
 
-    // Acquire the per-host semaphore. Released when `_permit` drops at the
-    // end of this function, whether we return success or error.
+/// Plain-text-decoding wrapper around `get_with_retry`. Used by
+/// providers whose registry serves anything other than JSON — today
+/// that's Maven Central's `maven-metadata.xml`. Same network policy
+/// applies (per-host semaphore, crates.io rate limit, 5xx retry).
+pub(crate) async fn get_text(
+    client: &Client,
+    kind: ManifestKind,
+    name: &str,
+    url: &str,
+) -> Result<String> {
+    let registry = kind.display();
+    let resp = get_with_retry(client, kind, name, url).await?;
+    resp.text()
+        .await
+        .with_context(|| format!("{registry} response for {name}"))
+}
+
+/// Network policy in one place: per-host semaphore, crates.io rate
+/// limit, one retry on a transient 5xx. Caller is responsible for
+/// decoding the response body in whatever shape its registry serves.
+async fn get_with_retry(
+    client: &Client,
+    kind: ManifestKind,
+    name: &str,
+    url: &str,
+) -> Result<reqwest::Response> {
+    let registry = kind.display();
+
+    // Acquire the per-host semaphore. Released when `_permit` drops at
+    // the end of this function, whether we return success or error.
     let _permit = semaphore_for(kind).acquire().await.expect("semaphore");
 
     // Extra rate-limit gate for crates.io. Computed inside a tight lock
@@ -127,13 +177,7 @@ pub(crate) async fn get_json<T: DeserializeOwned>(
             .with_context(|| format!("{registry} request for {name}"))?;
         let status = resp.status();
         if status.is_success() {
-            // Happy path: parse body as JSON. This `await` can fail if the
-            // server returned something malformed (very rare); the context
-            // string still points at the right package.
-            return resp
-                .json()
-                .await
-                .with_context(|| format!("{registry} response for {name}"));
+            return Ok(resp);
         }
         if status.is_server_error() && attempt == 0 {
             warn!(%registry, %name, %status, "transient registry error; retrying");

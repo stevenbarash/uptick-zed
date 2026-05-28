@@ -60,6 +60,18 @@ pub fn osv_ecosystem(kind: ManifestKind) -> &'static str {
         ManifestKind::Npm => "npm",
         ManifestKind::Composer => "Packagist",
         ManifestKind::Pub => "Pub",
+        ManifestKind::Go => "Go",
+        ManifestKind::Maven => "Maven",
+    }
+}
+
+/// Format a `Version` the way OSV expects for the given ecosystem.
+/// Most ecosystems take a bare `x.y.z`; Go is the outlier and requires
+/// the `v`-prefixed form (`v1.2.3`) it uses in `go.mod` / `go.sum`.
+fn osv_version_string(kind: ManifestKind, version: &Version) -> String {
+    match kind {
+        ManifestKind::Go => format!("v{version}"),
+        _ => version.to_string(),
     }
 }
 
@@ -80,7 +92,8 @@ pub async fn fetch_vulns(
 ) -> Result<Vec<Vulnerability>> {
     let _permit = OSV_SEM.acquire().await.expect("OSV semaphore");
     let ecosystem = osv_ecosystem(kind);
-    osv::query(client, ecosystem, name, &version.to_string()).await
+    let version_string = osv_version_string(kind, version);
+    osv::query(client, ecosystem, name, &version_string).await
 }
 
 /// Fan out per-ID detail fetches in parallel, sharing the OSV semaphore
@@ -126,5 +139,21 @@ mod tests {
         assert_eq!(osv_ecosystem(ManifestKind::Npm), "npm");
         assert_eq!(osv_ecosystem(ManifestKind::Composer), "Packagist");
         assert_eq!(osv_ecosystem(ManifestKind::Pub), "Pub");
+        assert_eq!(osv_ecosystem(ManifestKind::Go), "Go");
+        assert_eq!(osv_ecosystem(ManifestKind::Maven), "Maven");
+    }
+
+    #[test]
+    fn osv_version_string_per_ecosystem() {
+        // Go's OSV ecosystem expects `vX.Y.Z`; every other ecosystem
+        // takes the bare semver. Coverage is exhaustive so adding a
+        // new `ManifestKind` forces a decision in `osv_version_string`.
+        let v = Version::parse("1.2.3").unwrap();
+        assert_eq!(osv_version_string(ManifestKind::Go, &v), "v1.2.3");
+        assert_eq!(osv_version_string(ManifestKind::Cargo, &v), "1.2.3");
+        assert_eq!(osv_version_string(ManifestKind::Npm, &v), "1.2.3");
+        assert_eq!(osv_version_string(ManifestKind::Composer, &v), "1.2.3");
+        assert_eq!(osv_version_string(ManifestKind::Pub, &v), "1.2.3");
+        assert_eq!(osv_version_string(ManifestKind::Maven, &v), "1.2.3");
     }
 }
