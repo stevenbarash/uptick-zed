@@ -4,6 +4,35 @@ All notable changes to **Uptick** are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- LSP `textDocument/documentLink` provider. Clickable links are now
+  surfaced inline on every dep without requiring a hover: package names
+  link to the registry page (npm, crates.io, pub.dev, Packagist), and
+  vulnerable version literals link to the corresponding `osv.dev`
+  advisory. Cached canonical URLs (when available) take precedence over
+  the deterministic template, so first-paint still produces working
+  links before any registry round-trip lands.
+- LSP `textDocument/codeLens` provider with two server-defined commands:
+  `uptick.bump` (applies the same edit as the `Bump` quickfix via
+  `workspace/applyEdit`) and `uptick.open` (asks the client to surface
+  a URL via `window/showDocument`). Each outdated entry now shows a
+  `↑ Bump to X.Y.Z` lens above its line; vulnerable entries show
+  `⛔ N advisor{y|ies} — view on osv.dev` linking to the
+  highest-severity advisory.
+
+### Changed
+- Extracted `should_bump(literal, latest)` so the diagnostic, code
+  action, and code lens surfaces share one definition of "out-of-date".
+  The code action previously skipped only on `satisfies(...)`; it now
+  also respects the `parse_literal >= latest` downgrade guard the other
+  surfaces already had, so a manual pin newer than the cached `latest`
+  no longer offers a no-op (or downward) bump.
+- `execute_command` now logs every failure path (missing args,
+  malformed args, client-rejected `applyEdit`, refused/failed
+  `showDocument`) instead of silently dropping the result.
+
 ## [0.4.0] - 2026-05-01
 
 ### Added

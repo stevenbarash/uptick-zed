@@ -52,6 +52,10 @@ const DEBOUNCE: Duration = Duration::from_millis(250);
 
 const SERVER_NAME: &str = "uptick-lsp";
 const DIAGNOSTIC_SOURCE: &str = "uptick";
+/// Server-defined command names. Declared once so the capability list,
+/// the code-lens emitters, and the dispatcher can't drift.
+const CMD_BUMP: &str = "uptick.bump";
+const CMD_OPEN: &str = "uptick.open";
 
 /// User-Agent string. crates.io *requires* a descriptive UA — the default
 /// reqwest UA gets 403'd — and the other registries appreciate it too.
@@ -504,13 +508,8 @@ fn build_diagnostics(state: &DocState) -> Vec<Diagnostic> {
     for a in &state.entries {
         let name = &a.entry.name;
 
-        // Emit only when: latest resolved, literal doesn't already satisfy
-        // it, and (if the literal parsed) cur < latest. `is_none_or` covers
-        // the "didn't parse" case.
         if let Some(latest) = &a.latest {
-            if !version::satisfies(&a.entry.version_literal, latest)
-                && version::parse_literal(&a.entry.version_literal).is_none_or(|cur| &cur < latest)
-            {
+            if should_bump(&a.entry.version_literal, latest) {
                 out.push(Diagnostic {
                     range: a.entry.version_range,
                     severity: Some(DiagnosticSeverity::INFORMATION),
@@ -575,6 +574,26 @@ impl LanguageServer for Backend {
                         work_done_progress_options: WorkDoneProgressOptions::default(),
                     },
                 )),
+                // Clickable links on package names (→ registry page) and on
+                // vulnerable version literals (→ osv.dev advisory). Zed 0.X
+                // gated this behind `lsp_document_links` (default-on).
+                document_link_provider: Some(DocumentLinkOptions {
+                    resolve_provider: Some(false),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
+                // Inline `↑ Bump to X.Y.Z` and `⛔ N advisories` above each
+                // dep line. Resolution happens up-front in `code_lens` —
+                // every lens already carries its command + arguments.
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
+                // Server-defined commands invoked by the lenses. `uptick.bump`
+                // applies a text edit via `workspace/applyEdit`; `uptick.open`
+                // asks the client to surface a URL via `window/showDocument`.
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![CMD_BUMP.into(), CMD_OPEN.into()],
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
                 ..Default::default()
             },
         })
@@ -764,9 +783,7 @@ impl LanguageServer for Backend {
                 continue;
             }
             let Some(latest) = &a.latest else { continue };
-            // Don't offer a bump if the user's range already accepts the
-            // latest — the action would be a no-op.
-            if version::satisfies(&a.entry.version_literal, latest) {
+            if !should_bump(&a.entry.version_literal, latest) {
                 continue;
             }
             let new_text = replacement(&a.entry.version_literal, latest);
@@ -798,12 +815,202 @@ impl LanguageServer for Backend {
         Ok(Some(out))
     }
 
-    /// We advertise no custom commands, but some clients call
-    /// `workspace/executeCommand` speculatively on startup anyway. Return
-    /// null to keep them happy.
-    async fn execute_command(&self, _p: ExecuteCommandParams) -> LspResult<Option<Value>> {
-        Ok(Some(json!(null)))
+    /// Emit code lenses above each dep line:
+    ///   * `↑ Bump to X.Y.Z` for out-of-date entries — fires `uptick.bump`,
+    ///     which produces the same text edit as the `Bump` quickfix.
+    ///   * `⛔ N advisor{y|ies} — view on osv.dev` for vulnerable entries —
+    ///     fires `uptick.open` with the first advisory's URL.
+    ///
+    /// Lenses are pre-resolved so the client never needs to round-trip
+    /// `codeLens/resolve`.
+    async fn code_lens(&self, params: CodeLensParams) -> LspResult<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri;
+        let Some(state) = self.docs.get(&uri).map(|e| Arc::clone(&*e)) else {
+            return Ok(None);
+        };
+        let mut lenses: Vec<CodeLens> = Vec::new();
+        for a in &state.entries {
+            if let Some(latest) = &a.latest {
+                if should_bump(&a.entry.version_literal, latest) {
+                    let new_text = replacement(&a.entry.version_literal, latest);
+                    lenses.push(CodeLens {
+                        range: a.entry.version_range,
+                        command: Some(Command {
+                            title: format!("↑ Bump to {latest}"),
+                            command: CMD_BUMP.into(),
+                            arguments: Some(vec![json!({
+                                "uri": uri,
+                                "range": a.entry.version_range,
+                                "new_text": new_text,
+                            })]),
+                        }),
+                        data: None,
+                    });
+                }
+            }
+            // Surface the highest-severity advisory in the lens link;
+            // alphabetical id order (the fingerprint-stable sort) is
+            // arbitrary for severity, so don't just grab `.first()`.
+            // Treat missing scores as zero so a scored advisory always
+            // wins over an unscored one.
+            if let Some(worst) = a.vulns.iter().max_by(|x, y| {
+                let xs = x.score.unwrap_or(0.0);
+                let ys = y.score.unwrap_or(0.0);
+                xs.partial_cmp(&ys).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                let n = a.vulns.len();
+                let noun = if n == 1 { "advisory" } else { "advisories" };
+                lenses.push(CodeLens {
+                    range: a.entry.version_range,
+                    command: Some(Command {
+                        title: format!("⛔ {n} {noun} — view on osv.dev"),
+                        command: CMD_OPEN.into(),
+                        arguments: Some(vec![json!({
+                            "url": format!("https://osv.dev/vulnerability/{}", worst.id),
+                        })]),
+                    }),
+                    data: None,
+                });
+            }
+        }
+        Ok(Some(lenses))
     }
+
+    /// Emit clickable links: one per entry pointing at the package's
+    /// registry page (anchored on `name_range`), plus one per known
+    /// vulnerability pointing at the corresponding osv.dev advisory
+    /// (anchored on `version_range`). Hover already exposes the same
+    /// URLs, but document links surface them without requiring a hover.
+    async fn document_link(
+        &self,
+        params: DocumentLinkParams,
+    ) -> LspResult<Option<Vec<DocumentLink>>> {
+        let uri = params.text_document.uri;
+        let Some(state) = self.docs.get(&uri).map(|e| Arc::clone(&*e)) else {
+            return Ok(None);
+        };
+        let registry = state.kind.display();
+        let mut links: Vec<DocumentLink> = Vec::new();
+        for a in &state.entries {
+            // Prefer the provider-supplied canonical URL (e.g. crates.io's
+            // exact slug after redirects); fall back to a deterministic
+            // template so the link works even before the first fetch
+            // returns.
+            let target = self
+                .cache
+                .get(state.kind, &a.entry.name)
+                .and_then(|info| info.url)
+                .and_then(|s| Url::parse(&s).ok())
+                .or_else(|| registry_url(state.kind, &a.entry.name));
+            if let Some(target) = target {
+                links.push(DocumentLink {
+                    range: a.entry.name_range,
+                    target: Some(target),
+                    tooltip: Some(format!("View {} on {registry}", a.entry.name)),
+                    data: None,
+                });
+            }
+            for v in &a.vulns {
+                if let Ok(target) = Url::parse(&format!("https://osv.dev/vulnerability/{}", v.id)) {
+                    links.push(DocumentLink {
+                        range: a.entry.version_range,
+                        target: Some(target),
+                        tooltip: Some(format!("{}: view advisory on osv.dev", v.id)),
+                        data: None,
+                    });
+                }
+            }
+        }
+        Ok(Some(links))
+    }
+
+    /// Dispatch the two commands code lenses can fire:
+    ///   * `uptick.bump` → apply the same text edit as the `Bump` quickfix.
+    ///   * `uptick.open` → ask the client to surface a URL externally.
+    /// Unknown commands return null so unsupported clients don't error.
+    async fn execute_command(&self, p: ExecuteCommandParams) -> LspResult<Option<Value>> {
+        let cmd = p.command.as_str();
+        match cmd {
+            CMD_BUMP => {
+                let Some(arg) = p.arguments.into_iter().next() else {
+                    warn!(%cmd, "missing arguments");
+                    return Ok(None);
+                };
+                let args = match serde_json::from_value::<BumpArgs>(arg) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        warn!(%cmd, "bad arguments: {e:#}");
+                        return Ok(None);
+                    }
+                };
+                let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+                changes.insert(
+                    args.uri,
+                    vec![TextEdit {
+                        range: args.range,
+                        new_text: args.new_text,
+                    }],
+                );
+                match self
+                    .client
+                    .apply_edit(WorkspaceEdit {
+                        changes: Some(changes),
+                        document_changes: None,
+                        change_annotations: None,
+                    })
+                    .await
+                {
+                    Ok(resp) if !resp.applied => {
+                        warn!(%cmd, reason = ?resp.failure_reason, "client rejected edit");
+                    }
+                    Err(e) => warn!(%cmd, "apply_edit failed: {e:#}"),
+                    _ => {}
+                }
+                Ok(None)
+            }
+            CMD_OPEN => {
+                let Some(arg) = p.arguments.into_iter().next() else {
+                    warn!(%cmd, "missing arguments");
+                    return Ok(None);
+                };
+                let args = match serde_json::from_value::<OpenArgs>(arg) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        warn!(%cmd, "bad arguments: {e:#}");
+                        return Ok(None);
+                    }
+                };
+                match self
+                    .client
+                    .show_document(ShowDocumentParams {
+                        uri: args.url,
+                        external: Some(true),
+                        take_focus: Some(true),
+                        selection: None,
+                    })
+                    .await
+                {
+                    Ok(false) => warn!(%cmd, "client refused show_document"),
+                    Err(e) => warn!(%cmd, "show_document failed: {e:#}"),
+                    _ => {}
+                }
+                Ok(None)
+            }
+            _ => Ok(Some(json!(null))),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct BumpArgs {
+    uri: Url,
+    range: Range,
+    new_text: String,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenArgs {
+    url: Url,
 }
 
 /// Returns `true` if `pos` lies inside `range`. Both ends are inclusive,
@@ -826,6 +1033,33 @@ fn ranges_overlap(a: &Range, b: &Range) -> bool {
     let b_after_a = (b.start.line > a.end.line)
         || (b.start.line == a.end.line && b.start.character > a.end.character);
     !(a_after_b || b_after_a)
+}
+
+/// Single source of truth for "is this entry out-of-date and worth a
+/// `Bump` action?". Used by `build_diagnostics`, `code_action`, and
+/// `code_lens` so the three surfaces always agree.
+///
+/// Skip when (a) the user's range already accepts `latest`, or (b) the
+/// literal parses to a version that is already >= `latest` (avoids
+/// offering a downgrade if the cache lags behind a manual pin).
+fn should_bump(literal: &str, latest: &Version) -> bool {
+    !version::satisfies(literal, latest)
+        && version::parse_literal(literal).is_none_or(|cur| &cur < latest)
+}
+
+/// Deterministic registry-page URL for a given (kind, name). Used by
+/// `document_link` before the provider has had a chance to populate
+/// `VersionCache::url`; provider-supplied URLs (post-fetch) take precedence
+/// when present. Names are written verbatim — `@scope/foo` and
+/// `vendor/pkg` are valid path segments on all four registries.
+fn registry_url(kind: ManifestKind, name: &str) -> Option<Url> {
+    let raw = match kind {
+        ManifestKind::Npm => format!("https://www.npmjs.com/package/{name}"),
+        ManifestKind::Cargo => format!("https://crates.io/crates/{name}"),
+        ManifestKind::Pub => format!("https://pub.dev/packages/{name}"),
+        ManifestKind::Composer => format!("https://packagist.org/packages/{name}"),
+    };
+    Url::parse(&raw).ok()
 }
 
 /// Preserve the user's range operator when bumping, so we don't turn a
@@ -890,6 +1124,57 @@ mod tests {
         assert!(contains(&range, Position::new(4, 999)));
         assert!(!contains(&range, Position::new(1, 99)));
         assert!(!contains(&range, Position::new(5, 3)));
+    }
+
+    #[test]
+    fn should_bump_predicate() {
+        let latest = Version::parse("1.5.0").unwrap();
+        // Exact pin below latest → bump.
+        assert!(should_bump("=1.2.3", &latest));
+        // Caret range already accepts latest → no bump.
+        assert!(!should_bump("^1.0.0", &latest));
+        // Bare `1.2.3` parses as `^1.2.3` (semver's implicit caret), which
+        // accepts 1.5.0 — no bump.
+        assert!(!should_bump("1.2.3", &latest));
+        // Exact pin newer than `latest` → no bump (no downgrade when the
+        // registry cache lags behind a manual override).
+        assert!(!should_bump("=2.0.0", &latest));
+        // Unparseable literal: `parse_literal` returns None, so the
+        // `is_none_or` arm fires and we offer the bump.
+        assert!(should_bump("not-a-version", &latest));
+    }
+
+    #[test]
+    fn registry_url_per_kind() {
+        // Plain names hit the canonical path on each registry.
+        assert_eq!(
+            registry_url(ManifestKind::Npm, "react").unwrap().as_str(),
+            "https://www.npmjs.com/package/react"
+        );
+        assert_eq!(
+            registry_url(ManifestKind::Cargo, "serde").unwrap().as_str(),
+            "https://crates.io/crates/serde"
+        );
+        assert_eq!(
+            registry_url(ManifestKind::Pub, "provider")
+                .unwrap()
+                .as_str(),
+            "https://pub.dev/packages/provider"
+        );
+        assert_eq!(
+            registry_url(ManifestKind::Composer, "symfony/console")
+                .unwrap()
+                .as_str(),
+            "https://packagist.org/packages/symfony/console"
+        );
+    }
+
+    #[test]
+    fn registry_url_keeps_scope_prefix() {
+        // npm scoped names contain `@` and `/`; both are valid in a path
+        // segment and the registry's package page resolves them as-is.
+        let url = registry_url(ManifestKind::Npm, "@types/node").unwrap();
+        assert_eq!(url.as_str(), "https://www.npmjs.com/package/@types/node");
     }
 
     #[test]
