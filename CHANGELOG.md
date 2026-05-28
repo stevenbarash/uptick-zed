@@ -4,6 +4,36 @@ All notable changes to **Uptick** are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-05-28
+
+### Added
+- **First-run welcome toast.** On the LSP's first `initialized`, a
+  `window/showMessageRequest` surfaces a one-line tip pointing at the
+  `code_lens: "on"` setting (which unlocks the existing bump lenses)
+  with an "Open README" action that fires `window/showDocument`. Flag
+  persists per-OS under the platform state dir (`~/Library/Application
+  Support/uptick/`, `$XDG_STATE_HOME/uptick/` or `~/.local/state/uptick/`,
+  `%LOCALAPPDATA%\uptick\`) so the toast is one-shot. The request is
+  bounded by a 120 s timeout and dispatched off the critical path so
+  LSP startup is never gated on the round trip.
+- **Live `$/progress` Report updates** during the cold-cache burst.
+  Previously the progress banner only showed Begin → End; it now
+  emits a Report per completed registry fetch with a `done/total`
+  message and a percentage, so the banner reads
+  `Uptick: resolving 42 packages — 8/42` and ticks forward as
+  resolves land.
+- **README "First run" section.** New quickstart documents the two
+  Zed settings worth enabling (`code_lens: "on"`,
+  `auto_install_extensions`), surfaces the full map of where uptick
+  appears in the editor (inline / hover / code lens / code action /
+  document link / progress / banner diagnostic), and notes the
+  welcome-flag locations.
+
+### Internal
+- New `lsp/src/onboarding.rs` module isolates the welcome flow from
+  `server.rs`. Wired into `initialized` via `tokio::spawn` so it
+  cannot block startup or the client handshake.
+
 ## [0.6.0] - 2026-05-28
 
 ### Added
@@ -155,6 +185,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Manifest support for `package.json`, `Cargo.toml`, `pubspec.yaml`, and
   `composer.json`.
 
+[0.6.1]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.1
 [0.6.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.0
 [0.5.1]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.1
 [0.5.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.0

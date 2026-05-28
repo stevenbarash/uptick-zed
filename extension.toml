@@ -1,6 +1,6 @@
 id = "uptick"
 name = "Uptick"
-version = "0.6.0"
+version = "0.6.1"
 schema_version = 1
 description = "Shows the latest version of each package inline in package.json, Cargo.toml, pubspec.yaml, composer.json, go.mod, and pom.xml."
 authors = ["Steven Barash"]
