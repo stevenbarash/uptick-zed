@@ -7,6 +7,9 @@
 //! ## Module layout
 //!
 //! - [`cache`] — thread-safe TTL cache keyed by (ecosystem, package name).
+//! - [`lockfiles`] — sibling-lockfile parsers (`Cargo.lock`,
+//!   `package-lock.json`, …) so vulnerability scans target the actually-
+//!   installed version, not the literal in the manifest range.
 //! - [`manifest`] — the `ManifestKind` enum that drives dispatch, plus the
 //!   `RawEntry` struct each parser produces.
 //! - [`parsers`] — format-specific parsers (one per ecosystem). Each returns
@@ -24,6 +27,7 @@
 //! LSP event loop.
 
 pub mod cache;
+pub mod lockfiles;
 pub mod manifest;
 pub mod parsers;
 pub mod position;

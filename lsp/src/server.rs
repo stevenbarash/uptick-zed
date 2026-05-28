@@ -10,11 +10,12 @@
 //! - A new `did_change` aborts the prior pending resolve for that URI,
 //!   so we never spawn more than one resolver per buffer at a time.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -31,6 +32,7 @@ use tower_lsp::{Client as LspClient, LanguageServer};
 use tracing::{debug, warn};
 
 use crate::cache::VersionCache;
+use crate::lockfiles::{self, LockfileSnapshot, Resolutions};
 use crate::manifest::{ManifestKind, RawEntry};
 use crate::parsers;
 use crate::providers;
@@ -100,6 +102,13 @@ struct DocState {
     /// registry call fail — surfaced as a line-0 banner diagnostic so
     /// the user knows the silence isn't because Uptick is dead.
     network_failure: bool,
+    /// Direct-dependency `name → installed Version` resolved from the
+    /// sibling lockfile. Empty when no lockfile is present (or the
+    /// kind has no lockfile support yet). The vulnerability scanner
+    /// targets these installed versions in preference to the manifest
+    /// literal so a `^1.0.0` pin whose lockfile shows `1.0.7` actually
+    /// scans `1.0.7` against OSV.
+    resolutions: Arc<Resolutions>,
 }
 
 /// The `tower-lsp` service state. One `Backend` exists for the lifetime of
@@ -130,6 +139,11 @@ pub struct Backend {
     /// Monotonic counter for `$/progress` tokens, so concurrent resolves
     /// for different documents don't collide on the same token id.
     progress_seq: Arc<AtomicU64>,
+    /// Parsed lockfile snapshots keyed by absolute path, reused across
+    /// resolve bursts when the lockfile's mtime hasn't advanced. A
+    /// `cargo update` between manifest edits is picked up automatically
+    /// because the next mtime comparison invalidates the entry.
+    lockfiles: Arc<DashMap<PathBuf, Arc<LockfileSnapshot>>>,
 }
 
 impl Backend {
@@ -152,7 +166,12 @@ impl Backend {
             pushed: Arc::new(DashMap::new()),
             pending: Arc::new(DashMap::new()),
             progress_seq: Arc::new(AtomicU64::new(0)),
+            lockfiles: Arc::new(DashMap::new()),
         }
+    }
+
+    async fn resolutions_for(&self, uri: &Url, kind: ManifestKind) -> Arc<Resolutions> {
+        resolutions_for(&self.lockfiles, uri, kind).await
     }
 
     /// Parse text into entries and store. Returns the new state's `ManifestKind`
@@ -162,7 +181,7 @@ impl Backend {
     /// Pre-populates `latest` from the cache where possible so we don't have
     /// to wait for the network round-trip before showing hints on already-
     /// fetched packages.
-    fn reparse(&self, uri: &Url, text: &str) -> Option<ManifestKind> {
+    async fn reparse(&self, uri: &Url, text: &str) -> Option<ManifestKind> {
         let kind = ManifestKind::from_url(uri)?;
         let entries = parsers::parse(kind, text)
             .into_iter()
@@ -191,12 +210,17 @@ impl Backend {
             .get(uri)
             .map(|e| e.network_failure)
             .unwrap_or(false);
+        // Pull lockfile resolutions eagerly so hover and the scan-target
+        // builder both see the same snapshot. Cheap when cached; a
+        // single FS read on first call per lockfile mtime.
+        let resolutions = self.resolutions_for(uri, kind).await;
         self.docs.insert(
             uri.clone(),
             Arc::new(DocState {
                 kind,
                 entries,
                 network_failure,
+                resolutions,
             }),
         );
         Some(kind)
@@ -228,6 +252,7 @@ impl Backend {
         let pending = self.pending.clone();
         let client = self.client.clone();
         let progress_seq = self.progress_seq.clone();
+        let lockfiles = self.lockfiles.clone();
         let uri_key = uri.clone();
 
         let handle = tokio::spawn(async move {
@@ -245,6 +270,7 @@ impl Backend {
                 &docs,
                 &pushed,
                 &progress_seq,
+                &lockfiles,
                 &uri_key,
             )
             .await;
@@ -262,10 +288,70 @@ struct Caches {
     detail: Arc<DetailCache>,
 }
 
+/// Async I/O form callable from both sync entry points (via .await)
+/// and the resolve task. Locates the lockfile, mtime-checks it, and
+/// returns the cached parsed map when fresh; otherwise reparses and
+/// caches. All FS reads go through `tokio::fs` so a 1 MB workspace
+/// lockfile doesn't block the runtime worker.
+///
+/// Every "no signal" outcome — missing lockfile, unreadable file,
+/// unsupported kind, parse failure — returns the same `EMPTY` Arc, so
+/// the scanner always sees one shape regardless of filesystem state.
+async fn resolutions_for(
+    cache: &DashMap<PathBuf, Arc<LockfileSnapshot>>,
+    uri: &Url,
+    kind: ManifestKind,
+) -> Arc<Resolutions> {
+    let Some(path) = lockfiles::locate(uri, kind) else {
+        return empty_resolutions();
+    };
+    let Ok(meta) = tokio::fs::metadata(&path).await else {
+        cache.remove(&path);
+        return empty_resolutions();
+    };
+    let Ok(mtime) = meta.modified() else {
+        return empty_resolutions();
+    };
+    if let Some(snap) = cache.get(&path) {
+        if snap.mtime == mtime {
+            return snap.resolutions.clone();
+        }
+    }
+    match lockfiles::parse(kind, &path).await {
+        Ok(map) => {
+            let resolutions = Arc::new(map);
+            cache.insert(
+                path,
+                Arc::new(LockfileSnapshot {
+                    mtime,
+                    resolutions: resolutions.clone(),
+                }),
+            );
+            resolutions
+        }
+        Err(e) => {
+            warn!(?path, "lockfile parse failed: {e:#}");
+            empty_resolutions()
+        }
+    }
+}
+
+/// Shared sentinel `Arc<Resolutions>` for every "no signal" return.
+/// Avoids the per-call allocation that `Arc::new(Resolutions::new())`
+/// would do at the five early-exits in `resolutions_for`.
+fn empty_resolutions() -> Arc<Resolutions> {
+    static EMPTY: OnceLock<Arc<Resolutions>> = OnceLock::new();
+    EMPTY.get_or_init(|| Arc::new(Resolutions::new())).clone()
+}
+
 /// Do the actual network work for one URI and push updated diagnostics.
 ///
 /// Runs outside of any `Backend` method so `schedule_resolve` can spawn it
 /// as an independent task — `&self` borrows can't escape into `tokio::spawn`.
+// Eight named params is more legible here than another bundle struct
+// that adds zero clarity. Each one is referenced by name throughout
+// the body; grouping them would just force a `ctx.` prefix everywhere.
+#[allow(clippy::too_many_arguments)]
 async fn resolve_and_push(
     client: &LspClient,
     http: &Client,
@@ -273,6 +359,7 @@ async fn resolve_and_push(
     docs: &DashMap<Url, Arc<DocState>>,
     pushed: &DashMap<Url, u64>,
     progress_seq: &AtomicU64,
+    lockfiles: &DashMap<PathBuf, Arc<LockfileSnapshot>>,
     uri: &Url,
 ) {
     let cache = &caches.version;
@@ -286,6 +373,11 @@ async fn resolve_and_push(
         return;
     };
     let kind = state.kind;
+    // Refresh on every resolve burst — picks up `cargo update` /
+    // `npm install` since the prior `did_change` without needing a
+    // file watcher. The mtime gate inside `resolutions_for` keeps the
+    // common case (unchanged lockfile) to a single `stat`.
+    let resolutions = resolutions_for(lockfiles, uri, kind).await;
 
     // Deduplicate names — a package could appear in both `dependencies`
     // and `devDependencies`, but we only need to fetch its version once.
@@ -329,13 +421,16 @@ async fn resolve_and_push(
     // overwrite a cache hit with a failed scan — an error is logged and
     // treated as "retry next keystroke".
     //
-    // Parse each literal once; the parsed pairs (entry index → version) are
-    // reused for the scan-target sweep, the detail-id sweep, and stay in
-    // scope until the alter() fold below where literals may have shifted.
+    // Choose the scan target once per entry, in order: the version
+    // pinned by the sibling lockfile (when present), else the floor of
+    // the manifest literal. The pair (entry index → scan version) is
+    // reused for the scan-target sweep, the detail-id sweep, and stays
+    // in scope until the alter() fold below where literals may have
+    // shifted.
     let parsed: Vec<Option<Version>> = state
         .entries
         .iter()
-        .map(|a| crate::version::parse_for_scan(&a.entry.version_literal))
+        .map(|a| scan_version_for(&a.entry, &resolutions))
         .collect();
 
     // Size hints: every entry is a potential scan target at most, so
@@ -404,7 +499,10 @@ async fn resolve_and_push(
                     a.latest = info.latest_stable.or(info.latest_any);
                 }
             }
-            if let Some(ver) = crate::version::parse_for_scan(&a.entry.version_literal) {
+            // Use the same scan version as the fetch-target sweep
+            // above so the cache key lines up. Lockfile resolutions
+            // take precedence over the literal floor.
+            if let Some(ver) = scan_version_for(&a.entry, &resolutions) {
                 if let Some(mut vulns) = vuln_cache.get(kind, &a.entry.name, &ver) {
                     // Sort so the fingerprint is deterministic regardless of
                     // scan-completion order.
@@ -431,6 +529,7 @@ async fn resolve_and_push(
             kind: existing.kind,
             entries: new_entries,
             network_failure,
+            resolutions: resolutions.clone(),
         })
     });
 
@@ -503,6 +602,21 @@ fn fingerprint(state: &DocState) -> u64 {
     // Banner toggles must invalidate the fingerprint so the editor
     // actually receives the diagnostic flip.
     (state.network_failure as u8).hash(&mut h);
+    // Lockfile churn (cargo update, npm install) shifts resolved
+    // versions without touching the manifest text — hash a stable
+    // view so the editor sees the resulting hover / scan delta.
+    // `BTreeMap` collect makes iteration order deterministic across
+    // platforms.
+    let sorted: BTreeMap<&String, &Version> = state.resolutions.iter().collect();
+    sorted.len().hash(&mut h);
+    for (name, ver) in sorted {
+        name.hash(&mut h);
+        ver.major.hash(&mut h);
+        ver.minor.hash(&mut h);
+        ver.patch.hash(&mut h);
+        ver.pre.as_str().hash(&mut h);
+        ver.build.as_str().hash(&mut h);
+    }
     for a in &state.entries {
         a.entry.name.hash(&mut h);
         a.entry.version_literal.hash(&mut h);
@@ -744,7 +858,11 @@ impl LanguageServer for Backend {
     /// No debounce — the user explicitly asked to see this file.
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
-        if self.reparse(&uri, &params.text_document.text).is_some() {
+        if self
+            .reparse(&uri, &params.text_document.text)
+            .await
+            .is_some()
+        {
             self.schedule_resolve(uri, Duration::ZERO);
         }
     }
@@ -757,7 +875,7 @@ impl LanguageServer for Backend {
         let Some(change) = params.content_changes.into_iter().next() else {
             return;
         };
-        if self.reparse(&uri, &change.text).is_some() {
+        if self.reparse(&uri, &change.text).await.is_some() {
             self.schedule_resolve(uri, DEBOUNCE);
         }
     }
@@ -857,6 +975,14 @@ impl LanguageServer for Backend {
             // Fetch still in flight (or failed and waiting for retry). Be
             // honest with the user rather than hiding the field.
             md.push_str("latest: _resolving…_\n");
+        }
+        // Surface the actual installed version + which lockfile it came
+        // from. Helps the user understand why a vulnerability fires
+        // against a literal like `^1.0.0` (because the lockfile pins
+        // `1.0.7`, and that's what OSV was asked about).
+        if let Some(resolved) = state.resolutions.get(&hit.entry.name) {
+            let lockfile = lockfiles::filename(state.kind).unwrap_or("lockfile");
+            writeln!(md, "installed: `{resolved}` _({lockfile})_").unwrap();
         }
         // Final optional section: link straight to the registry page.
         if let Some(url) = self
@@ -1166,6 +1292,19 @@ fn ranges_overlap(a: &Range, b: &Range) -> bool {
     !(a_after_b || b_after_a)
 }
 
+/// Single source of truth for "which version should OSV be asked
+/// about for this entry?". Lockfile resolutions win — that's the
+/// version actually installed — and we fall back to the manifest
+/// literal's floor when the lockfile is absent or doesn't pin this
+/// package. Used by the scan-target builder, the detail-id sweep, and
+/// the alter() fold, so all three see the same answer.
+fn scan_version_for(entry: &RawEntry, resolutions: &Resolutions) -> Option<Version> {
+    resolutions
+        .get(&entry.name)
+        .cloned()
+        .or_else(|| version::parse_for_scan(&entry.version_literal))
+}
+
 /// Single source of truth for "is this entry out-of-date and worth a
 /// `Bump` action?". Used by `build_diagnostics`, `code_action`, and
 /// `code_lens` so the three surfaces always agree.
@@ -1189,6 +1328,15 @@ fn registry_url(kind: ManifestKind, name: &str) -> Option<Url> {
         ManifestKind::Cargo => format!("https://crates.io/crates/{name}"),
         ManifestKind::Pub => format!("https://pub.dev/packages/{name}"),
         ManifestKind::Composer => format!("https://packagist.org/packages/{name}"),
+        // pkg.go.dev accepts the full module path verbatim.
+        ManifestKind::Go => format!("https://pkg.go.dev/{name}"),
+        // Maven Central's web UI takes `groupId/artifactId` separated
+        // by a slash; our `name` is already the `groupId:artifactId`
+        // coordinate, so swap the `:` for `/`.
+        ManifestKind::Maven => format!(
+            "https://central.sonatype.com/artifact/{}",
+            name.replacen(':', "/", 1)
+        ),
     };
     Url::parse(&raw).ok()
 }
@@ -1259,11 +1407,13 @@ mod tests {
 
     #[test]
     fn network_banner_emitted_only_when_flagged() {
+        let empty_resolutions = Arc::new(Resolutions::new());
         // Empty state, no banner.
         let clean = DocState {
             kind: ManifestKind::Cargo,
             entries: vec![],
             network_failure: false,
+            resolutions: empty_resolutions.clone(),
         };
         assert!(build_diagnostics(&clean).is_empty());
 
@@ -1273,6 +1423,7 @@ mod tests {
             kind: ManifestKind::Cargo,
             entries: vec![],
             network_failure: true,
+            resolutions: empty_resolutions,
         };
         let diags = build_diagnostics(&flagged);
         assert_eq!(diags.len(), 1);
@@ -1282,6 +1433,118 @@ mod tests {
             Some(NumberOrString::String("network-error".into()))
         );
         assert_eq!(diags[0].range.start, Position::new(0, 0));
+    }
+
+    #[tokio::test]
+    async fn resolutions_for_caches_by_mtime() {
+        // Build a tiny `<tmp>/Cargo.toml + Cargo.lock` pair on disk and
+        // confirm that two back-to-back calls return the *same* Arc
+        // (pointer-eq) — the mtime cache must skip the second parse.
+        use std::fs;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "uptick-resolutions-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+
+        let lockfile = dir.join("Cargo.lock");
+        fs::write(
+            &lockfile,
+            indoc::indoc! {r#"
+                [[package]]
+                name = "serde"
+                version = "1.0.0"
+                source = "registry+https://github.com/rust-lang/crates.io-index"
+            "#},
+        )
+        .unwrap();
+        let manifest = dir.join("Cargo.toml");
+        fs::write(&manifest, "").unwrap();
+        let url = Url::from_file_path(&manifest).unwrap();
+        let cache = DashMap::new();
+
+        let r1 = resolutions_for(&cache, &url, ManifestKind::Cargo).await;
+        assert!(
+            r1.contains_key("serde"),
+            "first call must parse the lockfile"
+        );
+        assert_eq!(cache.len(), 1, "first call must populate the cache");
+
+        let r2 = resolutions_for(&cache, &url, ManifestKind::Cargo).await;
+        assert!(
+            Arc::ptr_eq(&r1, &r2),
+            "second call with unchanged mtime must return the cached Arc"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn resolutions_for_returns_empty_when_no_lockfile() {
+        // No lockfile sibling → empty resolutions, no cache pollution.
+        use std::fs;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "uptick-no-lockfile-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+
+        let manifest = dir.join("Cargo.toml");
+        fs::write(&manifest, "").unwrap();
+        let url = Url::from_file_path(&manifest).unwrap();
+        let cache = DashMap::new();
+
+        let res = resolutions_for(&cache, &url, ManifestKind::Cargo).await;
+        assert!(res.is_empty());
+        assert_eq!(cache.len(), 0, "no lockfile means nothing to cache");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scan_version_for_prefers_lockfile() {
+        let entry = RawEntry {
+            name: "lodash".into(),
+            version_literal: "^1.0.0".into(),
+            version_range: Range::default(),
+            name_range: Range::default(),
+            group: None,
+        };
+        // No lockfile → manifest floor (1.0.0).
+        let empty = Resolutions::new();
+        assert_eq!(
+            scan_version_for(&entry, &empty),
+            Some(Version::parse("1.0.0").unwrap())
+        );
+
+        // Lockfile pins 1.0.7 → that wins even though the literal is ^1.0.0.
+        let mut with_lockfile = Resolutions::new();
+        with_lockfile.insert("lodash".into(), Version::parse("1.0.7").unwrap());
+        assert_eq!(
+            scan_version_for(&entry, &with_lockfile),
+            Some(Version::parse("1.0.7").unwrap())
+        );
+
+        // Lockfile pins a different package → entry falls through to
+        // its own manifest floor.
+        let mut wrong_package = Resolutions::new();
+        wrong_package.insert("something-else".into(), Version::parse("9.9.9").unwrap());
+        assert_eq!(
+            scan_version_for(&entry, &wrong_package),
+            Some(Version::parse("1.0.0").unwrap())
+        );
     }
 
     #[test]

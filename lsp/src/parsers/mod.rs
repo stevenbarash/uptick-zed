@@ -18,8 +18,10 @@
 
 pub mod cargo_toml;
 pub mod composer_json;
+pub mod go_mod;
 pub mod json_common;
 pub mod package_json;
+pub mod pom_xml;
 pub mod pubspec_yaml;
 
 use std::ops::Range;
@@ -35,6 +37,8 @@ pub fn parse(kind: ManifestKind, source: &str) -> Vec<RawEntry> {
         ManifestKind::Cargo => cargo_toml::parse(source),
         ManifestKind::Pub => pubspec_yaml::parse(source),
         ManifestKind::Composer => composer_json::parse(source),
+        ManifestKind::Go => go_mod::parse(source),
+        ManifestKind::Maven => pom_xml::parse(source),
     }
 }
 

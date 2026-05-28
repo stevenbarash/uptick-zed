@@ -4,6 +4,57 @@ All notable changes to **Uptick** are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-28
+
+### Added
+- **Go module support** (`go.mod`). Parses single-line and block
+  `require` statements (skipping `// indirect` deps, `replace`, and
+  `exclude` since they aren't directly bumpable from the manifest).
+  Queries `proxy.golang.org/<module>/@latest` for upstream versions
+  with case-escaping per the Go module proxy spec (`golang.org/X/foo`
+  → `golang.org/!x/foo`). Registry URL points at `pkg.go.dev`.
+- **Maven support** (`pom.xml`). Parses every `<dependency>` under any
+  `<dependencies>` ancestor (top-level, `<dependencyManagement>`,
+  profiles) using `roxmltree`. Queries Maven Central
+  `maven-metadata.xml` for `<release>` / `<latest>` versions and
+  permissively coerces Maven's non-semver shapes (`5.3.0.RELEASE`,
+  `1.0`, `2.0.0.Final`) into comparable versions via
+  `coerce_to_semver`. Registry URL points at `central.sonatype.com`.
+- **Lockfile-aware vulnerability scanning** (`Cargo.lock`,
+  `package-lock.json` v2/v3). New `crate::lockfiles` module locates
+  the sibling lockfile (walks up to 8 ancestors for workspace roots),
+  mtime-caches the parse, and threads the resolved version into the
+  scan target. OSV now sees the version your lockfile actually pins
+  rather than the manifest range floor — a `^1.0.0` pinned to
+  `1.0.7` is scanned as `1.0.7`. Hover surfaces
+  `installed: 1.0.7 (Cargo.lock)` so the user knows which version
+  triggered any advisory.
+- `OSV` ecosystem mapping for `Go` (with mandatory `v` prefix on the
+  version string) and `Maven`. `osv_version_string` helper enforces
+  the per-ecosystem version format so Go's `v1.2.3` and everyone
+  else's bare `1.2.3` end up in the right shape.
+- `get_text` provider helper, mirroring `get_json` but returning raw
+  text. Used by Maven (which serves XML); shares the per-host
+  semaphore + crates.io rate limit + 5xx retry policy.
+- Real-file integration tests: `lsp/tests/real_lockfile.rs` (parses
+  this workspace's own `Cargo.lock`), `lsp/tests/real_go_mod.rs`,
+  `lsp/tests/real_pom_xml.rs` with committed fixtures.
+
+### Changed
+- `tokio` gains the `fs` feature so lockfile I/O stays off the
+  runtime worker. Lockfile parses + reads are now fully async.
+- `Backend::reparse` is now `async fn` (calls async
+  `resolutions_for`); `did_open` / `did_change` await it.
+- `DocState` gains `resolutions: Arc<Resolutions>`. Reparse populates
+  from the lockfile cache; resolve bursts refresh on every call so
+  `cargo update` / `npm install` is picked up automatically without
+  a file watcher.
+- `fingerprint` now hashes lockfile resolutions (stable BTreeMap
+  iter) so a lockfile change without a manifest edit still invalidates
+  the per-doc diagnostic dedup and reaches the editor.
+- Extension `languages` list adds `"Go Module"` and `"XML"` so Zed
+  attaches the LSP to `go.mod` and `pom.xml`.
+
 ## [0.5.1] - 2026-05-28
 
 ### Added
@@ -104,6 +155,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Manifest support for `package.json`, `Cargo.toml`, `pubspec.yaml`, and
   `composer.json`.
 
+[0.6.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.0
 [0.5.1]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.1
 [0.5.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.0
 [0.4.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.4.0

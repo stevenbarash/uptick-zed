@@ -25,6 +25,13 @@ pub enum ManifestKind {
     Pub,
     /// `composer.json` / Packagist.
     Composer,
+    /// `go.mod` / proxy.golang.org. Names include the full module path
+    /// (`github.com/foo/bar`), versions are `v`-prefixed.
+    Go,
+    /// `pom.xml` / Maven Central. Names are the `groupId:artifactId`
+    /// coordinate; versions are free-form strings (Maven doesn't enforce
+    /// semver, e.g. `5.3.0.RELEASE`).
+    Maven,
 }
 
 impl ManifestKind {
@@ -43,6 +50,8 @@ impl ManifestKind {
             // Pub accepts either extension; treat them the same.
             "pubspec.yaml" | "pubspec.yml" => Some(Self::Pub),
             "composer.json" => Some(Self::Composer),
+            "go.mod" => Some(Self::Go),
+            "pom.xml" => Some(Self::Maven),
             _ => None,
         }
     }
@@ -56,6 +65,8 @@ impl ManifestKind {
             Self::Cargo => "crates.io",
             Self::Pub => "pub.dev",
             Self::Composer => "Packagist",
+            Self::Go => "Go modules",
+            Self::Maven => "Maven Central",
         }
     }
 }
