@@ -967,10 +967,14 @@ impl LanguageServer for Backend {
                 let latest = a.latest.as_ref()?;
                 let up_to_date = version::satisfies(&a.entry.version_literal, latest);
                 // `✓` for "you're already compatible", `→` for "newer
-                // available". Both hints include the latest version so the
-                // user sees it without moving their cursor.
+                // available". A major-version delta gets `⚠ major`
+                // appended so the user can tell a breaking-change
+                // candidate apart from a routine patch/minor bump
+                // before they ever click the lens or quickfix.
                 let label = if up_to_date {
                     format!(" ✓ {latest}")
+                } else if is_major_bump(&a.entry.version_literal, latest) {
+                    format!(" → {latest} ⚠ major")
                 } else {
                     format!(" → {latest}")
                 };
@@ -1121,6 +1125,55 @@ impl LanguageServer for Backend {
                 data: None,
             }));
         }
+
+        // Aggregate action: "Bump N deps (safe)". Walks every entry in
+        // the file (not just those overlapping `params.range`) because
+        // a workspace-wide quickfix is useful regardless of where the
+        // cursor sits. Safe = `should_bump` AND not `is_major_bump`,
+        // so the user can trust this action never crosses a semver
+        // major boundary. Emitted only when there are at least two
+        // candidates — for a single bump the per-line action is
+        // already enough, and a "Bump 1 dep (safe)" entry would just
+        // clutter the picker.
+        let safe_edits: Vec<TextEdit> = state
+            .entries
+            .iter()
+            .filter_map(|a| {
+                let latest = a.latest.as_ref()?;
+                if !should_bump(&a.entry.version_literal, latest) {
+                    return None;
+                }
+                if is_major_bump(&a.entry.version_literal, latest) {
+                    return None;
+                }
+                Some(TextEdit {
+                    range: a.entry.version_range,
+                    new_text: replacement(&a.entry.version_literal, latest),
+                })
+            })
+            .collect();
+        if safe_edits.len() >= 2 {
+            let n = safe_edits.len();
+            let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+            changes.insert(uri.clone(), safe_edits);
+            out.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Bump {n} deps to latest (safe — patch / minor only)"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: None,
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    document_changes: None,
+                    change_annotations: None,
+                }),
+                command: None,
+                // Per-line action is the conventional preferred — leave
+                // this one un-marked so the editor doesn't auto-fire a
+                // file-wide rewrite on a single Cmd-. press.
+                is_preferred: Some(false),
+                disabled: None,
+                data: None,
+            }));
+        }
         Ok(Some(out))
     }
 
@@ -1181,6 +1234,87 @@ impl LanguageServer for Backend {
                     data: None,
                 });
             }
+        }
+
+        // File-level summary lens. Anchors at line 0 / col 0 so it
+        // floats above the first dep regardless of file kind. Emitted
+        // when the file has at least one known vulnerability or at
+        // least three outdated entries — below that, the per-line
+        // markers already tell the whole story and a summary line
+        // would just be noise. Clicking the lens jumps to the
+        // highest-severity advisory when any exist; otherwise the
+        // lens is purely informational (no command).
+        let vuln_total: usize = state.entries.iter().map(|a| a.vulns.len()).sum();
+        let outdated_total: usize = state
+            .entries
+            .iter()
+            .filter(|a| {
+                a.latest
+                    .as_ref()
+                    .is_some_and(|latest| should_bump(&a.entry.version_literal, latest))
+            })
+            .count();
+        if vuln_total > 0 || outdated_total >= 3 {
+            // Compose title: include only the non-zero halves so a
+            // vulns-only or outdated-only file doesn't read as
+            // "0 vulnerabilities · …".
+            let mut parts: Vec<String> = Vec::with_capacity(2);
+            if vuln_total > 0 {
+                let noun = if vuln_total == 1 {
+                    "vulnerability"
+                } else {
+                    "vulnerabilities"
+                };
+                parts.push(format!("⛔ {vuln_total} {noun}"));
+            }
+            if outdated_total > 0 {
+                parts.push(format!("→ {outdated_total} outdated"));
+            }
+            let title = parts.join(" · ");
+            // Worst advisory across every entry — same severity
+            // heuristic as the per-line lens but searched globally.
+            let worst_vuln = state
+                .entries
+                .iter()
+                .flat_map(|a| a.vulns.iter())
+                .max_by(|x, y| {
+                    let xs = x.score.unwrap_or(0.0);
+                    let ys = y.score.unwrap_or(0.0);
+                    xs.partial_cmp(&ys).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            let command = worst_vuln.map(|worst| Command {
+                title: title.clone(),
+                command: CMD_OPEN.into(),
+                arguments: Some(vec![json!({
+                    "url": format!("https://osv.dev/vulnerability/{}", worst.id),
+                })]),
+            });
+            // Zero-width anchor at the buffer start — LSP accepts
+            // this; clients render the lens floating above line 0.
+            let anchor = Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
+            };
+            lenses.push(CodeLens {
+                range: anchor,
+                command: command.or(Some(Command {
+                    title,
+                    // No-op command name — LSP clients that require
+                    // some command-id treat this as a benign click
+                    // target. We never register it in
+                    // `execute_command_provider`, so even if a client
+                    // does fire it, the request is rejected.
+                    command: "uptick.noop".into(),
+                    arguments: None,
+                })),
+                data: None,
+            });
         }
         Ok(Some(lenses))
     }
@@ -1367,6 +1501,16 @@ fn scan_version_for(entry: &RawEntry, resolutions: &Resolutions) -> Option<Versi
 fn should_bump(literal: &str, latest: &Version) -> bool {
     !version::satisfies(literal, latest)
         && version::parse_literal(literal).is_none_or(|cur| &cur < latest)
+}
+
+/// Returns `true` when bumping `literal` to `latest` crosses a semver
+/// major boundary. Conservative: if we can't parse the literal floor
+/// (`git:`, `path:`, `${var}`, pseudo-versions), we report `false`
+/// rather than alarming the user about a bump they can't verify.
+/// Shared so the inlay-hint marker and the "Bump all (safe)" filter
+/// agree on what counts as safe.
+fn is_major_bump(literal: &str, latest: &Version) -> bool {
+    version::parse_literal(literal).is_some_and(|cur| cur.major < latest.major)
 }
 
 /// Deterministic registry-page URL for a given (kind, name). Used by
