@@ -4,6 +4,29 @@ All notable changes to **Uptick** are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-05-28
+
+### Added
+- **Major-bump marker in inlay hints.** When the latest version
+  crosses a semver major boundary vs. the literal floor, the inlay
+  appends `⚠ major` to the existing `→ X.Y.Z` so a breaking-change
+  candidate is visible without hover or click. Shared via a new
+  `is_major_bump` helper alongside `should_bump`, so every surface
+  that needs the distinction (the new aggregate code action, future
+  config-gated filters) agrees on what counts as major.
+- **"Bump all (safe)" file-wide code action.** A single aggregate
+  quickfix that produces text edits for every entry where
+  `should_bump` AND `!is_major_bump` — i.e. the patch- and
+  minor-only set. Emitted when there are at least two such
+  candidates (per-line action is enough for a single bump). Not
+  marked `is_preferred`, so Cmd-. on a line still picks the
+  conventional per-line action.
+- **File-top summary code lens.** Anchored at line 0 / col 0 when
+  the file has at least one known vulnerability or at least three
+  outdated entries. Reads `⛔ N vulnerabilities · → M outdated`
+  (composing only the non-zero halves). Click jumps to the
+  highest-severity advisory across the whole file when any exist.
+
 ## [0.6.1] - 2026-05-28
 
 ### Added
@@ -185,6 +208,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Manifest support for `package.json`, `Cargo.toml`, `pubspec.yaml`, and
   `composer.json`.
 
+[0.6.2]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.2
 [0.6.1]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.1
 [0.6.0]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.6.0
 [0.5.1]: https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.1
