@@ -25,8 +25,9 @@ tokio   = { version = "1.35" }   ✓ 1.35.1
 
 ## What you get
 
-- **Latest versions, inline.** Every dependency is annotated with the current upstream version. Out-of-date ones get a one-keystroke `Bump to X.Y.Z` code action that preserves your `^`, `~`, `>=` operator.
-- **Vulnerability scanning.** Each pinned version is checked against [osv.dev](https://osv.dev). Known-vulnerable versions surface as LSP diagnostics with the GHSA or CVE ID as the code.
+- **Latest versions, inline.** Every dependency is annotated with the current upstream version. Out-of-date ones get a one-keystroke `Bump to X.Y.Z` code action that preserves your `^`, `~`, `>=` operator, plus an `↑ Bump to X.Y.Z` code lens floating above the line for a one-click bump.
+- **Vulnerability scanning.** Each pinned version is checked against [osv.dev](https://osv.dev). Known-vulnerable versions surface as LSP diagnostics with the GHSA or CVE ID as the code, and an `⛔ N advisories — view on osv.dev` lens links straight to the highest-severity advisory.
+- **Clickable inline links.** Package names jump to the registry page (npmjs.com, crates.io, pub.dev, Packagist); vulnerable version literals jump to the matching osv.dev advisory — no hover required.
 - **Severity that means something.** Each advisory's CVSS base score is fetched separately and mapped to a real editor severity — Critical and High advisories appear red, not buried in a sea of yellow.
 
 | CVSS base score | Severity in editor |
@@ -122,6 +123,7 @@ If `uptick-lsp` is already on `PATH`, the Zed extension uses that binary and doe
 
 | Release | Highlight |
 |---|---|
+| [**v0.5.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.5.0) | Document-link + code-lens providers. Package names and vulnerable literals become ctrl-click targets; `↑ Bump to X.Y.Z` and `⛔ N advisories — view on osv.dev` float above each dep line. |
 | [**v0.4.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.4.0) | Hover augmentation for vulnerabilities — severity badge, GHSA/CVE id, summary, CVSS vector, and an osv.dev link, rendered inline next to the registry link. |
 | [**v0.3.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.3.0) | CVSS-aligned severity. Critical/High → `Error`, Medium → `Warning`, Low → `Information`. |
 | [**v0.2.0**](https://github.com/stevenbarash/uptick-zed/releases/tag/v0.2.0) | Vulnerability scanning. Known-vulnerable pins surface as warnings with GHSA/CVE codes. |
@@ -165,7 +167,6 @@ Two crates live here:
 
 - Pubspec entries with `git:`, `path:`, or `hosted:` specs are skipped — no single upstream version to compare.
 - Private registries return 401/403; no credential support yet.
-- Zed renders inlay hints at end-of-line, not above as a clickable lens. The bump UX is `cmd-.` (code actions), not a click.
 - Vulnerability scans use the manifest literal, not the lockfile-resolved install version. Pinning `^1.0.0` of a package whose latest 1.x is vulnerable will not flag — `1.0.0` is what gets scanned.
 - CVSS_V4 vectors aren't parsed yet. Records carrying only V4 fall through to the text-bucket fallback if present, otherwise no severity.
 
